@@ -1,0 +1,266 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f5f5f5;
+  color: #1a1a1a;
+  min-height: 100vh;
+}
+
+/* ── LAYOUT ─────────────────────────────────────────── */
+
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e5e5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.filename {
+  font-size: 16px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.back-link {
+  color: #666;
+  text-decoration: none;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.back-link:hover {
+  color: #1a1a1a;
+}
+
+.main {
+  flex: 1;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── КНОПКИ ─────────────────────────────────────────── */
+
+.action-bar {
+  display: flex;
+  gap: 12px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+
+.btn:hover  { opacity: 0.85; }
+.btn:active { opacity: 0.70; }
+
+.btn-primary   { background: #e53935; color: #fff; }
+.btn-secondary { background: #e8e8e8; color: #1a1a1a; }
+.btn-small     { background: #e8e8e8; color: #1a1a1a; padding: 6px 14px; font-size: 13px; }
+
+/* ── УВЕДОМЛЕНИЯ ─────────────────────────────────────── */
+
+.notice {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notice p {
+  font-size: 14px;
+  color: #555;
+  line-height: 1.5;
+}
+
+/* ── СТАТУС ЗАГРУЗКИ ─────────────────────────────────── */
+
+.upload-status {
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f0f0f0;
+  color: #444;
+}
+
+.upload-status.success { background: #e8f5e9; color: #2e7d32; }
+.upload-status.error   { background: #fce4ec; color: #c62828; }
+
+/* ── СЕКЦИЯ ──────────────────────────────────────────── */
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 12px;
+}
+
+/* ── СПИСОК ФАЙЛОВ ───────────────────────────────────── */
+
+.file-item {
+  display: block;
+  padding: 14px 16px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.1s;
+}
+
+.file-item:hover { background: #f8f8f8; }
+
+.file-name {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.file-meta {
+  font-size: 13px;
+  color: #999;
+}
+
+/* ── ПУСТЫЕ СОСТОЯНИЯ ────────────────────────────────── */
+
+.empty-state {
+  text-align: center;
+  color: #bbb;
+  font-size: 14px;
+  padding: 40px 20px;
+  line-height: 1.7;
+}
+
+.error-text { color: #e53935; }
+
+/* ── ПЛЕЕР ───────────────────────────────────────────── */
+
+.player-wrap audio {
+  width: 100%;
+}
+
+/* ── ТАБЫ ────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  border-bottom: 2px solid #e5e5e5;
+}
+
+.tab {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: #999;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s;
+}
+
+.tab:hover  { color: #444; }
+.tab.active { color: #1a1a1a; border-bottom-color: #e53935; }
+
+/* ── КОНТЕНТ ТАБОВ ───────────────────────────────────── */
+
+.tab-content        { padding: 20px 0; }
+.tab-content.hidden { display: none; }
+
+.hidden { display: none; }
+
+/* ── ТРАНСКРИПТ ──────────────────────────────────────── */
+
+.transcript-text {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #1a1a1a;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── ЗАПИСЬ ──────────────────────────────────────────── */
+
+.recording-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: #fce4ec;
+  border-radius: 8px;
+}
+
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #c62828;
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e53935;
+  animation: rec-pulse 1s infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+.btn-stop {
+  background: #e53935;
+  color: #fff;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.transcript-actions {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 20px;
+}

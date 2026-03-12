@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Запись — Аргус</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="detail">
+  <div class="app">
+    <header class="header">
+      <a href="/" class="back-link">← Назад</a>
+      <h1 class="filename" id="file-title">Загрузка...</h1>
+    </header>
+
+    <main class="main">
+      <div class="player-wrap">
+        <audio id="audio-player" controls></audio>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="overview">Обзор</button>
+        <button class="tab" data-tab="transcript">Транскрипт</button>
+        <button class="tab" data-tab="actions">Действия</button>
+        <button class="tab" data-tab="expert">Эксперт</button>
+      </div>
+
+      <div class="tab-content" id="tab-overview">
+        <div id="overview-state"></div>
+      </div>
+
+      <div class="tab-content hidden" id="tab-transcript">
+        <div id="transcript-state"></div>
+      </div>
+
+      <div class="tab-content hidden" id="tab-actions">
+        <div id="actions-state"></div>
+      </div>
+
+      <div class="tab-content hidden" id="tab-expert">
+        <div id="expert-state"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
