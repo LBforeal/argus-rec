@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
@@ -7,32 +7,52 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="index">
+  <div class="recording-waves" aria-hidden="true">
+    <span class="wave-ring ring-1"></span>
+    <span class="wave-ring ring-2"></span>
+    <span class="wave-ring ring-3"></span>
+    <span class="wave-ring ring-4"></span>
+  </div>
+
   <div class="app">
-    <header class="header">
-      <h1 class="logo">Аргус</h1>
+    <header class="header home-header">
+      <div class="brand-mark-wrap" aria-hidden="true">
+        <img src="/logo%20white.png" alt="" class="brand-mark" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/logo%20black.png';}else{this.parentElement.style.display='none';}">
+      </div>
+      <h1 class="logo">АРГУС</h1>
     </header>
 
-    <main class="main">
-      <div class="action-bar">
-        <button class="btn btn-primary" id="btn-record">Записать</button>
-        <label class="btn btn-secondary" id="btn-upload-label">
-          Загрузить файл
-          <input type="file" id="file-input" accept="audio/*" hidden>
-        </label>
-      </div>
-
-      <div id="recording-panel" class="recording-panel" hidden>
-        <div class="recording-indicator">
-          <span class="recording-dot"></span>
-          <span id="recording-timer">00:00</span>
+    <main class="main home-main">
+      <section class="home-panel">
+        <div class="action-bar">
+          <button class="btn btn-primary btn-record" id="btn-record">
+            <span class="btn-record-wave-icon" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+            </span>
+            <span>Записать</span>
+          </button>
+          <label class="btn btn-secondary" id="btn-upload-label">
+            Загрузить файл
+            <input type="file" id="file-input" accept="audio/*" hidden>
+          </label>
         </div>
-        <button class="btn btn-stop" id="btn-stop-record">Остановить</button>
-      </div>
 
-      <div id="upload-status" class="upload-status" hidden></div>
+        <div id="recording-panel" class="recording-panel" hidden>
+          <div class="recording-indicator">
+            <span class="recording-dot"></span>
+            <span id="recording-timer">00:00</span>
+          </div>
+          <button class="btn btn-stop" id="btn-stop-record">Остановить</button>
+        </div>
 
-      <section class="section">
-        <h2 class="section-title">Записи</h2>
+        <div id="upload-status" class="upload-status" hidden></div>
+      </section>
+
+      <section class="section home-list-section">
+        <div class="section-head">
+          <h2 class="section-title">Записи</h2>
+          <p class="section-note">Удаление доступно прямо из списка</p>
+        </div>
         <div id="file-list"></div>
       </section>
     </main>

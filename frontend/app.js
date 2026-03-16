@@ -18,6 +18,8 @@ function initIndex() {
   document.getElementById('btn-record').addEventListener('click', _startRecording);
   document.getElementById('btn-stop-record').addEventListener('click', _stopRecording);
   document.getElementById('file-input').addEventListener('change', handleFileUpload);
+  document.getElementById('file-list').addEventListener('click', _handleFileListClick);
+  document.getElementById('file-list').addEventListener('keydown', _handleFileListClick);
 
   loadFileList();
 }
@@ -41,6 +43,13 @@ async function _startRecording() {
     return;
   }
 
+  if (typeof MediaRecorder === 'undefined') {
+    status.hidden = false;
+    status.className = 'upload-status error';
+    status.textContent = 'Браузер не поддерживает запись через MediaRecorder.';
+    return;
+  }
+
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -59,7 +68,26 @@ async function _startRecording() {
 
   _recordingStream = stream;
   _recordedChunks = [];
-  _mediaRecorder = new MediaRecorder(stream);
+  try {
+    const preferredMimeTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+    ];
+    let options = undefined;
+    if (typeof MediaRecorder.isTypeSupported === 'function') {
+      const selected = preferredMimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+      if (selected) options = { mimeType: selected };
+    }
+    _mediaRecorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+  } catch (err) {
+    _releaseStream();
+    status.hidden = false;
+    status.className = 'upload-status error';
+    status.textContent = `Не удалось запустить запись: ${err.message}`;
+    return;
+  }
 
   _mediaRecorder.ondataavailable = (e) => {
     if (e.data.size > 0) _recordedChunks.push(e.data);
@@ -68,10 +96,10 @@ async function _startRecording() {
   _mediaRecorder.onstop = async () => {
     _stopTimer();
     _releaseStream();
-    document.getElementById('recording-panel').hidden = true;
-    document.querySelector('.action-bar').hidden = false;
+    _setRecordingUi(false);
 
-    const blob = new Blob(_recordedChunks, { type: 'audio/webm' });
+    const rawType = _mediaRecorder && _mediaRecorder.mimeType ? _mediaRecorder.mimeType : 'audio/webm';
+    const blob = new Blob(_recordedChunks, { type: rawType });
     _recordedChunks = [];
 
     if (blob.size === 0) {
@@ -81,11 +109,21 @@ async function _startRecording() {
       return;
     }
 
+    let wavBlob;
+    try {
+      wavBlob = await _convertRecordedBlobToWav(blob);
+    } catch (err) {
+      status.hidden = false;
+      status.className = 'upload-status error';
+      status.textContent = `Не удалось обработать запись: ${err.message}`;
+      return;
+    }
+
     const now = new Date();
     const p = (n) => String(n).padStart(2, '0');
-    const fname = `record_${now.getFullYear()}${p(now.getMonth()+1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}.webm`;
+    const fname = `record_${now.getFullYear()}${p(now.getMonth()+1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}.wav`;
 
-    const file = new File([blob], fname, { type: 'audio/webm' });
+    const file = new File([wavBlob], fname, { type: 'audio/wav' });
     const formData = new FormData();
     formData.append('file', file);
 
@@ -111,16 +149,14 @@ async function _startRecording() {
   _mediaRecorder.onerror = () => {
     _stopTimer();
     _releaseStream();
-    document.getElementById('recording-panel').hidden = true;
-    document.querySelector('.action-bar').hidden = false;
+    _setRecordingUi(false);
     status.hidden = false;
     status.className = 'upload-status error';
     status.textContent = 'Ошибка записи. Попробуйте снова.';
   };
 
   _mediaRecorder.start();
-  document.querySelector('.action-bar').hidden = true;
-  document.getElementById('recording-panel').hidden = false;
+  _setRecordingUi(true);
   _startTimer();
 }
 
@@ -152,6 +188,15 @@ function _releaseStream() {
     _recordingStream.getTracks().forEach(t => t.stop());
     _recordingStream = null;
   }
+}
+
+function _setRecordingUi(isRecording) {
+  const actionBar = document.querySelector('.action-bar');
+  const panel = document.getElementById('recording-panel');
+  const body = document.body;
+  if (actionBar) actionBar.hidden = isRecording;
+  if (panel) panel.hidden = !isRecording;
+  if (body) body.classList.toggle('is-recording', isRecording);
 }
 
 async function handleFileUpload(event) {
@@ -196,14 +241,88 @@ async function loadFileList() {
       return;
     }
 
-    container.innerHTML = files.map(f => `
-      <a class="file-item" href="/detail.html?file=${encodeURIComponent(f.filename)}">
-        <div class="file-name">${escapeHtml(f.filename)}</div>
-        <div class="file-meta">${formatSize(f.size)} · ${formatDate(f.modified)}</div>
-      </a>
-    `).join('');
+    container.innerHTML = files.map(f => {
+      const encoded = encodeURIComponent(f.filename);
+      return `
+        <article class="file-item" data-open-file="${encoded}" role="link" tabindex="0">
+          <div class="file-main" data-open-file="${encoded}">
+            <div class="file-name">${escapeHtml(f.filename)}</div>
+            <div class="file-meta">${formatSize(f.size)} · ${formatDate(f.modified)}</div>
+          </div>
+          <button class="file-delete-btn" type="button" data-delete-file="${encoded}" aria-label="Удалить запись ${escapeHtml(f.filename)}">
+            Удалить
+          </button>
+        </article>
+      `;
+    }).join('');
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state error-text">Не удалось загрузить список файлов: ${escapeHtml(err.message || err)}</div>`;
+  }
+}
+
+function _handleFileListClick(event) {
+  const isKeyboardAction = event.type === 'keydown';
+  if (isKeyboardAction && event.key !== 'Enter' && event.key !== ' ') return;
+
+  const deleteButton = event.target.closest('[data-delete-file]');
+  if (deleteButton) {
+    if (isKeyboardAction) event.preventDefault();
+    const encoded = deleteButton.dataset.deleteFile;
+    const filename = _decodeFilenameFromAttr(encoded);
+    if (!filename) return;
+    _deleteRecording(filename);
+    return;
+  }
+
+  const openNode = event.target.closest('[data-open-file]');
+  if (openNode) {
+    if (isKeyboardAction) event.preventDefault();
+    const encoded = openNode.dataset.openFile;
+    const filename = _decodeFilenameFromAttr(encoded);
+    if (!filename) return;
+    _openRecordingDetail(filename);
+  }
+}
+
+function _decodeFilenameFromAttr(value) {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
   } catch {
-    container.innerHTML = '<div class="empty-state error-text">Не удалось загрузить список файлов.</div>';
+    return '';
+  }
+}
+
+function _openRecordingDetail(filename) {
+  window.location.href = `/detail.html?file=${encodeURIComponent(filename)}`;
+}
+
+async function _deleteRecording(filename) {
+  const status = document.getElementById('upload-status');
+  const ok = window.confirm(`Удалить запись "${filename}"?\nЭто действие нельзя отменить.`);
+  if (!ok) return;
+
+  status.hidden = false;
+  status.className = 'upload-status';
+  status.textContent = 'Удаление записи…';
+
+  try {
+    const res = await fetch(`/api/recordings/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      let message = `Ошибка удаления (HTTP ${res.status})`;
+      try {
+        const data = await res.json();
+        if (data && data.detail) message = data.detail;
+      } catch {}
+      throw new Error(message);
+    }
+
+    status.className = 'upload-status success';
+    status.textContent = 'Запись удалена.';
+    await loadFileList();
+  } catch (err) {
+    status.className = 'upload-status error';
+    status.textContent = `Не удалось удалить запись: ${err.message || err}`;
   }
 }
 
@@ -220,6 +339,8 @@ function initDetail() {
 
   _currentFilename = filename;
   document.getElementById('file-title').textContent = filename;
+  const detailMeta = document.getElementById('detail-meta');
+  if (detailMeta) detailMeta.textContent = `Файл: ${filename}`;
   document.title = `${filename} — Аргус`;
 
   document.getElementById('audio-player').src =
@@ -244,6 +365,8 @@ function initDetail() {
     });
   });
 
+  _initAnalysisModeSelector();
+
   // Обзор — активный таб по умолчанию, загружаем сразу
   _loadOverviewState(filename);
 
@@ -252,6 +375,50 @@ function initDetail() {
     _clearOverviewPoll();
     _clearActionsPoll();
     _clearExpertPoll();
+  });
+}
+
+function _initAnalysisModeSelector() {
+  const dropdown = document.getElementById('analysis-mode-dropdown');
+  const trigger = document.getElementById('analysis-mode-trigger');
+  const menu = document.getElementById('analysis-mode-menu');
+  const value = document.getElementById('analysis-mode-value');
+  if (!dropdown || !trigger || !menu || !value) return;
+
+  const close = () => {
+    menu.classList.add('hidden');
+    trigger.setAttribute('aria-expanded', 'false');
+    dropdown.classList.remove('is-open');
+  };
+
+  const open = () => {
+    menu.classList.remove('hidden');
+    trigger.setAttribute('aria-expanded', 'true');
+    dropdown.classList.add('is-open');
+  };
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menu.classList.contains('hidden')) open();
+    else close();
+  });
+
+  menu.querySelectorAll('.detail-mode-option').forEach((option) => {
+    option.addEventListener('click', () => {
+      const mode = option.dataset.mode || option.textContent || '';
+      value.textContent = mode.trim();
+      menu.querySelectorAll('.detail-mode-option').forEach((el) => el.classList.remove('is-active'));
+      option.classList.add('is-active');
+      close();
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) close();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
   });
 }
 
@@ -316,9 +483,9 @@ async function _startTranscription(filename) {
     const res = await fetch(`/api/transcribe/${encodeURIComponent(filename)}`, { method: 'POST' });
     if (!res.ok) throw new Error('Ошибка запуска');
     _transcriptPoll = setInterval(() => _loadTranscriptState(filename), 3000);
-  } catch {
+  } catch (err) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить расшифровку.</div>
+      <div class="empty-state error-text">Не удалось запустить расшифровку: ${escapeHtml(err.message || err)}</div>
       <div class="transcript-actions">
         <button class="btn btn-secondary" id="btn-retry-transcript">Попробовать снова</button>
       </div>
@@ -569,7 +736,19 @@ function _renderExpertState(data, filename, container) {
     _expertPoll = setInterval(() => _loadExpertState(filename), 4000);
 
   } else if (data.status === 'done') {
-    _renderExpertResult(data.sections || [], container);
+    const report = data.report || {};
+    if (!report.title) {
+      container.innerHTML = `
+        <div class="empty-state error-text">Формат экспертного отчёта устарел. Перезапустите анализ.</div>
+        <div class="transcript-actions">
+          <button class="btn btn-secondary" id="btn-rerun-expert">Перезапустить анализ</button>
+        </div>
+      `;
+      document.getElementById('btn-rerun-expert')
+        .addEventListener('click', () => _startExpert(filename));
+    } else {
+      _renderExpertReport(report, container);
+    }
 
   } else if (data.status === 'error') {
     container.innerHTML = `
@@ -586,38 +765,93 @@ function _renderExpertState(data, filename, container) {
   }
 }
 
-function _renderExpertResult(sections, container) {
-  if (!sections || sections.length === 0) {
+function _renderExpertReport(report, container) {
+  if (!report || !report.title) {
     container.innerHTML = '<div class="empty-state">Анализ не вернул результатов.</div>';
     return;
   }
-  let html = '';
-  for (const section of sections) {
-    html += `<div style="margin-bottom:24px">`;
-    html += `<h3 style="font-size:16px;font-weight:600;margin-bottom:12px;color:#1a1a1a">${escapeHtml(section.title)}</h3>`;
-    if (!section.items || section.items.length === 0) {
-      html += `<p style="color:#999;font-size:14px;padding:8px 0">Не найдено.</p>`;
-    } else {
-      for (const item of section.items) {
-        html += `<div style="margin-bottom:14px;padding:12px 14px;border:1px solid #e5e5e5;border-radius:8px">`;
-        html += `<p style="font-size:14px;font-weight:500;margin-bottom:8px;color:#1a1a1a">${escapeHtml(item.text || '')}</p>`;
-        if (item.quote) {
-          html += `<blockquote style="border-left:3px solid #e53935;padding-left:12px;margin:8px 0;color:#555;font-size:13px;font-style:italic">\u00AB${escapeHtml(item.quote)}\u00BB</blockquote>`;
-        }
-        if (item.source_file) {
-          html += `<p style="font-size:12px;color:#888;margin-top:8px">`;
-          html += `<strong>Источник:</strong> ${escapeHtml(item.source_file)}`;
-          if (item.source_excerpt) {
-            html += ` \u2014 \u00AB${escapeHtml(item.source_excerpt)}\u00BB`;
-          }
-          html += `</p>`;
-        }
-        html += `</div>`;
-      }
-    }
-    html += `</div>`;
-  }
-  container.innerHTML = html;
+
+  const levelClass = report.match_level === 'Высокий' ? 'level-high'
+    : report.match_level === 'Средний' ? 'level-medium' : 'level-low';
+
+  const signsHtml = (report.found_signs || []).length > 0
+    ? (report.found_signs.map(s => `<span class="expert-chip">${escapeHtml(s)}</span>`).join(''))
+    : '<span class="expert-empty-inline">не найдено</span>';
+
+  const actionsHtml = (report.action_items || []).length > 0
+    ? `<ul class="expert-actions-list">${report.action_items.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`
+    : '<p class="expert-empty-inline">нет</p>';
+
+  const phrasesHtml = (report.key_phrases || []).length > 0
+    ? `<ul class="expert-phrases-list">${report.key_phrases.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`
+    : '<p class="expert-empty-inline">нет</p>';
+
+  const summaries = report.speakers_summary || [];
+  const speakerSummaryHtml = `
+    <div class="expert-section">
+      <div class="expert-section-label">Демо-разделение участников</div>
+      ${summaries.length > 0
+        ? summaries.map(sp => `
+            <div class="expert-speaker-card">
+              <div class="expert-speaker-name">${escapeHtml(sp.speaker)}</div>
+              <div class="expert-speaker-text">${escapeHtml(sp.text)}</div>
+            </div>`).join('')
+        : '<p class="expert-empty-inline">Демо-разделение спикеров недоступно для этой записи.</p>'}
+    </div>`;
+
+  const signs = report.speaker_signs || [];
+  const speakerSignsHtml = signs.length > 0
+    ? `<div class="expert-section">
+        <div class="expert-section-label">Признаки по участникам</div>
+        ${signs.map(sp => `
+          <div class="expert-speaker-signs-row">
+            <span class="expert-speaker-signs-name">${escapeHtml(sp.speaker)}:</span>
+            <span class="expert-speaker-signs-list">${(sp.signs || []).map(s => escapeHtml(s)).join(', ')}</span>
+          </div>`).join('')}
+      </div>` : '';
+
+  container.innerHTML = `
+    <div class="expert-report">
+      <h2 class="expert-title">${escapeHtml(report.title)}</h2>
+      <p class="expert-subtitle">${escapeHtml(report.subtitle)}</p>
+
+      <div class="expert-cards-row">
+        <div class="expert-card">
+          <div class="expert-card-label">Сценарий</div>
+          <div class="expert-card-value">${escapeHtml(report.scenario)}</div>
+        </div>
+        <div class="expert-card">
+          <div class="expert-card-label">Уровень совпадения</div>
+          <div class="expert-card-value ${levelClass}">${escapeHtml(report.match_level)}</div>
+        </div>
+      </div>
+
+      <div class="expert-section">
+        <div class="expert-section-label">Обнаруженные признаки</div>
+        <div class="expert-chips">${signsHtml}</div>
+      </div>
+
+      <div class="expert-section">
+        <div class="expert-section-label">Вывод</div>
+        <p class="expert-conclusion">${escapeHtml(report.conclusion)}</p>
+      </div>
+
+      <div class="expert-section">
+        <div class="expert-section-label">Рекомендованные действия</div>
+        ${actionsHtml}
+      </div>
+
+      <div class="expert-section">
+        <div class="expert-section-label">Ключевые фразы в записи</div>
+        ${phrasesHtml}
+      </div>
+
+      ${speakerSummaryHtml}
+      ${speakerSignsHtml}
+
+      <p class="expert-note">${escapeHtml(report.note)}</p>
+    </div>
+  `;
 }
 
 async function _startExpert(filename) {
@@ -628,9 +862,9 @@ async function _startExpert(filename) {
     const res = await fetch(`/api/expert/${encodeURIComponent(filename)}`, { method: 'POST' });
     if (!res.ok) throw new Error('Ошибка запуска');
     _expertPoll = setInterval(() => _loadExpertState(filename), 4000);
-  } catch {
+  } catch (err) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить экспертный анализ.</div>
+      <div class="empty-state error-text">Не удалось запустить экспертный анализ: ${escapeHtml(err.message || err)}</div>
       <div class="transcript-actions">
         <button class="btn btn-secondary" id="btn-retry-expert">Попробовать снова</button>
       </div>
@@ -657,6 +891,78 @@ function formatSize(bytes) {
 
 function formatDate(ts) {
   return new Date(ts * 1000).toLocaleString('ru-RU');
+}
+
+async function _convertRecordedBlobToWav(blob) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) {
+    throw new Error('AudioContext недоступен в браузере');
+  }
+  const ctx = new AudioCtx();
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const decoded = await new Promise((resolve, reject) => {
+      ctx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+    });
+    return _audioBufferToWavBlob(decoded);
+  } finally {
+    if (ctx && typeof ctx.close === 'function') {
+      try { await ctx.close(); } catch {}
+    }
+  }
+}
+
+function _audioBufferToWavBlob(audioBuffer) {
+  const sampleRate = audioBuffer.sampleRate;
+  const length = audioBuffer.length;
+  const channels = audioBuffer.numberOfChannels;
+  const mono = new Float32Array(length);
+  for (let c = 0; c < channels; c += 1) {
+    const data = audioBuffer.getChannelData(c);
+    for (let i = 0; i < length; i += 1) {
+      mono[i] += data[i] / channels;
+    }
+  }
+  const wavBuffer = _encodeWavPcm16(mono, sampleRate);
+  return new Blob([wavBuffer], { type: 'audio/wav' });
+}
+
+function _encodeWavPcm16(samples, sampleRate) {
+  const numChannels = 1;
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i += 1) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+  return buffer;
 }
 
 function escapeHtml(str) {

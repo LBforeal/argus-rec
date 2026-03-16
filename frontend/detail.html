@@ -7,39 +7,94 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="detail">
-  <div class="app">
-    <header class="header">
-      <a href="/" class="back-link">← Назад</a>
-      <h1 class="filename" id="file-title">Загрузка...</h1>
+  <div class="app detail-app">
+    <header class="header detail-header">
+      <a href="/" class="back-link detail-back-link">← К записям</a>
+
+      <div class="detail-brand" aria-hidden="true">
+        <div class="detail-brand-mark-wrap">
+          <img
+            src="/logo%20white.png"
+            alt=""
+            class="detail-brand-mark"
+            onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/logo%20black.png';}else{this.parentElement.style.display='none';}"
+          >
+        </div>
+        <div class="detail-brand-word">АРГУС</div>
+      </div>
     </header>
 
-    <main class="main">
-      <div class="player-wrap">
+    <main class="main detail-main">
+      <section class="detail-hero">
+        <h1 class="detail-title" id="file-title">Загрузка...</h1>
+        <div class="detail-meta-row">
+          <span class="detail-meta-pill" id="detail-meta">Файл: —</span>
+        </div>
+      </section>
+
+      <section class="detail-toolbar">
+        <div class="detail-mode-pill detail-mode-dropdown" id="analysis-mode-dropdown">
+          <span class="detail-mode-label">Режим анализа</span>
+          <button
+            class="detail-mode-trigger"
+            id="analysis-mode-trigger"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+          >
+            <span id="analysis-mode-value">Следователь СК</span>
+            <span class="detail-mode-chevron" aria-hidden="true">▾</span>
+          </button>
+
+          <div class="detail-mode-menu hidden" id="analysis-mode-menu" role="listbox" aria-label="Режим анализа">
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник МВД">Сотрудник МВД</button>
+            <button type="button" class="detail-mode-option is-active" data-mode="Следователь СК">Следователь СК</button>
+            <button type="button" class="detail-mode-option" data-mode="Судья / помощник">Судья / помощник</button>
+            <button type="button" class="detail-mode-option" data-mode="Адвокат / юрист">Адвокат / юрист</button>
+            <button type="button" class="detail-mode-option" data-mode="Служба безопасности">Служба безопасности</button>
+            <button type="button" class="detail-mode-option" data-mode="Прокуратура">Прокуратура</button>
+            <button type="button" class="detail-mode-option" data-mode="Налоговый орган">Налоговый орган</button>
+            <button type="button" class="detail-mode-option" data-mode="МФЦ / приёмная">МФЦ / приёмная</button>
+          </div>
+        </div>
+        <button
+          class="btn detail-doc-btn"
+          type="button"
+          disabled
+          title="Функция будет добавлена позже"
+        >
+          Сформировать документ
+        </button>
+      </section>
+
+      <div class="player-wrap detail-player-wrap">
         <audio id="audio-player" controls></audio>
       </div>
 
-      <div class="tabs">
+      <div class="tabs detail-tabs">
         <button class="tab active" data-tab="overview">Обзор</button>
         <button class="tab" data-tab="transcript">Транскрипт</button>
         <button class="tab" data-tab="actions">Действия</button>
         <button class="tab" data-tab="expert">Эксперт</button>
       </div>
 
-      <div class="tab-content" id="tab-overview">
-        <div id="overview-state"></div>
-      </div>
+      <section class="detail-content-shell">
+        <div class="tab-content" id="tab-overview">
+          <div id="overview-state"></div>
+        </div>
 
-      <div class="tab-content hidden" id="tab-transcript">
-        <div id="transcript-state"></div>
-      </div>
+        <div class="tab-content hidden" id="tab-transcript">
+          <div id="transcript-state"></div>
+        </div>
 
-      <div class="tab-content hidden" id="tab-actions">
-        <div id="actions-state"></div>
-      </div>
+        <div class="tab-content hidden" id="tab-actions">
+          <div id="actions-state"></div>
+        </div>
 
-      <div class="tab-content hidden" id="tab-expert">
-        <div id="expert-state"></div>
-      </div>
+        <div class="tab-content hidden" id="tab-expert">
+          <div id="expert-state"></div>
+        </div>
+      </section>
     </main>
   </div>
 
