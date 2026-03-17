@@ -6,6 +6,20 @@ let _overviewPoll = null;
 let _actionsPoll = null;
 let _expertPoll = null;
 
+async function _extractApiError(res, fallbackText) {
+  try {
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      return data?.detail || data?.error || fallbackText;
+    }
+    await res.text();
+    return `${fallbackText} (HTTP ${res.status})`;
+  } catch (_) {
+    return fallbackText;
+  }
+}
+
 if (page === 'index') {
   initIndex();
 } else if (page === 'detail') {
@@ -134,8 +148,8 @@ async function _startRecording() {
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: formData });
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || 'Ошибка сохранения');
+        const msg = await _extractApiError(res, 'Ошибка сохранения');
+        throw new Error(msg);
       }
       status.className = 'upload-status success';
       status.textContent = 'Запись сохранена.';
@@ -214,8 +228,8 @@ async function handleFileUpload(event) {
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: formData });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Неизвестная ошибка');
+      const msg = await _extractApiError(res, 'Неизвестная ошибка');
+      throw new Error(msg);
     }
     status.className = 'upload-status success';
     status.textContent = 'Файл успешно загружен.';

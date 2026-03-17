@@ -9,3 +9,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: ARGUS_WHISPER_MODEL
+        value: tiny
+      - key: ARGUS_RECORDINGS_DIR
+        value: /tmp/argus_recordings

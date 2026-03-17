@@ -13,8 +13,16 @@ from fastapi.responses import FileResponse
 import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
 FRONTEND_DIR = os.path.join(BASE_DIR, "..", "frontend")
+
+# Local: backend/recordings
+# Render/cloud: /tmp/argus_recordings (writable ephemeral storage)
+if os.getenv("ARGUS_RECORDINGS_DIR"):
+    RECORDINGS_DIR = os.getenv("ARGUS_RECORDINGS_DIR")
+elif os.getenv("RENDER"):
+    RECORDINGS_DIR = "/tmp/argus_recordings"
+else:
+    RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
 
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
@@ -50,7 +58,10 @@ def _get_whisper_model():
     with _whisper_model_lock:
         if _whisper_model is None:
             import whisper
-            _whisper_model = whisper.load_model("base")
+            model_name = os.getenv("ARGUS_WHISPER_MODEL")
+            if not model_name:
+                model_name = "tiny" if os.getenv("RENDER") else "base"
+            _whisper_model = whisper.load_model(model_name)
         return _whisper_model
 
 
