@@ -436,6 +436,12 @@ function _initAnalysisModeSelector() {
   });
 }
 
+function _getSelectedAnalysisMode() {
+  const value = document.getElementById('analysis-mode-value');
+  const mode = (value?.textContent || '').trim();
+  return mode || 'Следователь СК';
+}
+
 // ── TRANSCRIPT TAB ───────────────────────────────────────────
 
 async function _loadTranscriptState(filename) {
@@ -873,7 +879,9 @@ async function _startExpert(filename) {
   container.innerHTML = '<div class="empty-state">Идёт экспертный анализ… Это может занять до минуты.</div>';
 
   try {
-    const res = await fetch(`/api/expert/${encodeURIComponent(filename)}`, { method: 'POST' });
+    const mode = _getSelectedAnalysisMode();
+    const query = `?analysis_mode=${encodeURIComponent(mode)}`;
+    const res = await fetch(`/api/expert/${encodeURIComponent(filename)}${query}`, { method: 'POST' });
     if (!res.ok) throw new Error('Ошибка запуска');
     _expertPoll = setInterval(() => _loadExpertState(filename), 4000);
   } catch (err) {

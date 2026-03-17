@@ -330,7 +330,7 @@ def _expert_path(filename: str) -> str:
     return os.path.join(RECORDINGS_DIR, filename + EXPERT_SUFFIX)
 
 
-def _run_expert(filename: str):
+def _run_expert(filename: str, analysis_mode: str | None = None):
     import json
     try:
         tpath = _transcript_path(filename)
@@ -338,7 +338,7 @@ def _run_expert(filename: str):
             transcript = f.read().strip()
 
         from backend.ai_module import run_expert_analysis
-        result = run_expert_analysis(transcript)
+        result = run_expert_analysis(transcript, analysis_mode=analysis_mode)
 
         with open(_expert_path(filename), "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False)
@@ -692,7 +692,7 @@ def get_actions(filename: str):
 # ── EXPERT ENDPOINTS ──────────────────────────────────────────
 
 @app.post("/api/expert/{filename}")
-def start_expert(filename: str):
+def start_expert(filename: str, analysis_mode: str | None = None):
     filename = os.path.basename(filename)
     audio_path = os.path.join(RECORDINGS_DIR, filename)
     if not os.path.isfile(audio_path):
@@ -707,7 +707,7 @@ def start_expert(filename: str):
             return {"status": "running"}
         _expert_jobs[filename] = {"status": "running"}
 
-    _executor.submit(_run_expert, filename)
+    _executor.submit(_run_expert, filename, analysis_mode)
     return {"status": "running"}
 
 

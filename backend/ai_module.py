@@ -336,6 +336,92 @@ SCENARIO_MAP = [
 
 # ── NORMALIZATION ─────────────────────────────────────────────────────────────
 
+DEFAULT_ANALYSIS_MODE = "Следователь СК"
+
+ANALYSIS_MODE_PROFILES = {
+    "Сотрудник МВД": {
+        "subtitle": "Подача ориентирована на служебную фиксацию обстановки и первичные меры.",
+        "conclusion": "Профиль МВД: приоритет — фактическая фиксация и оперативная ясность.",
+        "action_lead": "Приоритет МВД",
+    },
+    "Следователь СК": {
+        "subtitle": "Подача ориентирована на процессуальную последовательность и доказательственные признаки.",
+        "conclusion": "Профиль СК: приоритет — процессуальная полнота и непротиворечивость фиксации.",
+        "action_lead": "Приоритет СК",
+    },
+    "Судья / помощник": {
+        "subtitle": "Подача ориентирована на нейтральную структуру фактов и проверяемость формулировок.",
+        "conclusion": "Профиль суда: приоритет — структурированность и однозначная интерпретация фактов.",
+        "action_lead": "Приоритет суда",
+    },
+    "Адвокат / юрист": {
+        "subtitle": "Подача ориентирована на юридическую точность формулировок и зоны уточнения.",
+        "conclusion": "Профиль юриста: приоритет — выявление неоднозначностей и точек для уточняющих вопросов.",
+        "action_lead": "Приоритет юриста",
+    },
+    "Служба безопасности": {
+        "subtitle": "Подача ориентирована на риски доступа, контроль периметра и протокол реагирования.",
+        "conclusion": "Профиль безопасности: приоритет — снижение рисков и контроль уязвимых зон.",
+        "action_lead": "Приоритет безопасности",
+    },
+    "Прокуратура": {
+        "subtitle": "Подача ориентирована на полноту проверки и процессуальный контроль достаточности данных.",
+        "conclusion": "Профиль прокуратуры: приоритет — оценка достаточности и корректности процессуальных шагов.",
+        "action_lead": "Приоритет прокуратуры",
+    },
+    "Налоговый орган": {
+        "subtitle": "Подача ориентирована на документируемые факты, сроки и подтверждающие следы.",
+        "conclusion": "Профиль налогового органа: приоритет — проверяемость данных и связность по времени.",
+        "action_lead": "Приоритет налогового органа",
+    },
+    "МФЦ / приёмная": {
+        "subtitle": "Подача ориентирована на понятность для заявителя и корректную маршрутизацию действий.",
+        "conclusion": "Профиль МФЦ: приоритет — ясная коммуникация и корректное оформление дальнейших шагов.",
+        "action_lead": "Приоритет МФЦ",
+    },
+}
+
+
+def _normalize_analysis_mode(analysis_mode: str | None) -> str:
+    if not analysis_mode:
+        return DEFAULT_ANALYSIS_MODE
+    value = analysis_mode.strip()
+    if value in ANALYSIS_MODE_PROFILES:
+        return value
+    return DEFAULT_ANALYSIS_MODE
+
+
+def _apply_analysis_mode_profile(report: dict, analysis_mode: str | None) -> dict:
+    mode = _normalize_analysis_mode(analysis_mode)
+    profile = ANALYSIS_MODE_PROFILES[mode]
+
+    result = dict(report)
+    result["analysis_mode"] = mode
+
+    subtitle = (result.get("subtitle") or "").strip()
+    result["subtitle"] = f"{subtitle} {profile['subtitle']}".strip()
+
+    conclusion = (result.get("conclusion") or "").strip()
+    if conclusion:
+        result["conclusion"] = f"{profile['conclusion']} {conclusion}"
+    else:
+        result["conclusion"] = profile["conclusion"]
+
+    actions = result.get("action_items") or []
+    if actions:
+        result["action_items"] = [f"{profile['action_lead']}: {actions[0]}"] + actions[1:]
+    else:
+        result["action_items"] = [f"{profile['action_lead']}: уточнить следующий шаг по профилю."]
+
+    note = (result.get("note") or "").strip()
+    if note:
+        result["note"] = f"{note} Профиль анализа: {mode}."
+    else:
+        result["note"] = f"Профиль анализа: {mode}."
+
+    return result
+
+
 def _normalize(text: str) -> str:
     text = text.lower()
     text = text.replace("ё", "е")
@@ -537,7 +623,7 @@ def _fallback_report(
 
 # ── PUBLIC API ────────────────────────────────────────────────────────────────
 
-def run_expert_analysis(transcript: str) -> dict:
+def run_expert_analysis(transcript: str, analysis_mode: str | None = None) -> dict:
     """Rule-based demo expert engine. Fully offline. No fake content."""
     normalized = _normalize(transcript)
     found = _find_groups(normalized)
@@ -547,7 +633,9 @@ def run_expert_analysis(transcript: str) -> dict:
     speakers_summary, speaker_signs = _build_speaker_data(sentences)
 
     if scenario is None:
-        return _fallback_report(found, "Низкий", speakers_summary, speaker_signs)
+        base_report = _fallback_report(found, "Низкий", speakers_summary, speaker_signs)
+        return _apply_analysis_mode_profile(base_report, analysis_mode)
 
     level = _match_level(found, scenario)
-    return _confirmed_report(found, level, scenario, speakers_summary, speaker_signs)
+    base_report = _confirmed_report(found, level, scenario, speakers_summary, speaker_signs)
+    return _apply_analysis_mode_profile(base_report, analysis_mode)
