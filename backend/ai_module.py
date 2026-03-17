@@ -1,6 +1,7 @@
 """Expert analysis module: rule-based demo expert engine. No external API."""
 
 import re
+from difflib import SequenceMatcher
 from collections import defaultdict
 
 # ── SEMANTIC GROUPS ──────────────────────────────────────────────────────────
@@ -337,12 +338,58 @@ def _normalize(text: str) -> str:
 
 # ── MATCHING ─────────────────────────────────────────────────────────────────
 
+def _tokenize_words(text: str) -> list:
+    return re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", text.lower())
+
+
+def _similar_words(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 2:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= 0.80
+
+
+def _contains_variant(normalized: str, variant: str) -> bool:
+    # Exact fast path
+    if variant in normalized:
+        return True
+
+    # Fuzzy path for minor STT typos (example: "слебы" ~ "следы")
+    variant_words = _tokenize_words(variant)
+    text_words = _tokenize_words(normalized)
+    if not variant_words or not text_words:
+        return False
+
+    m = len(variant_words)
+    n = len(text_words)
+    if n < m:
+        return False
+
+    for i in range(n - m + 1):
+        window = text_words[i:i + m]
+        matched = 0
+        for vw, tw in zip(variant_words, window):
+            if vw == tw:
+                matched += 1
+                continue
+            # Keep fuzzy matching conservative for short words.
+            if len(vw) >= 4 and len(tw) >= 4 and _similar_words(vw, tw):
+                matched += 1
+        if matched == m:
+            return True
+        if m >= 3 and matched >= m - 1:
+            return True
+
+    return False
+
+
 def _find_groups(normalized: str) -> dict:
     """Return {group_id: (label, matched_variant)} for each group with a match."""
     found = {}
     for group_id, group in SEMANTIC_GROUPS.items():
         for variant in group["variants"]:
-            if variant in normalized:
+            if _contains_variant(normalized, variant):
                 found[group_id] = (group["label"], variant)
                 break
     return found
@@ -454,6 +501,8 @@ def _fallback_report(
     found: dict, level: str,
     speakers_summary: list, speaker_signs: list,
 ) -> dict:
+    found_signs = [label for label, _ in found.values()]
+    key_phrases = [variant for _, variant in found.values()]
     return {
         "title": "Недостаточно доменных признаков для экспертного разбора",
         "subtitle": (
@@ -462,13 +511,13 @@ def _fallback_report(
         ),
         "scenario": "Экспертный шаблон не применён",
         "match_level": "Низкий",
-        "found_signs": ["доменные признаки не найдены"],
+        "found_signs": found_signs if found_signs else ["доменные признаки не найдены"],
         "conclusion": (
             "Запись относится к нейтральному или бытовому разговору "
             "и не подходит для доменного экспертного разбора."
         ),
         "action_items": ["экспертный шаблон не применён"],
-        "key_phrases": ["значимые доменные фразы не обнаружены"],
+        "key_phrases": key_phrases if key_phrases else ["значимые доменные фразы не обнаружены"],
         "note": (
             "Для demo expert mode требуется запись с ключевыми признаками "
             "одного из доменных сценариев."
