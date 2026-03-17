@@ -13,3 +13,7 @@ services:
         value: tiny
       - key: ARGUS_RECORDINGS_DIR
         value: /tmp/argus_recordings
+      - key: ARGUS_COMPUTE_TYPE
+        value: int8
+      - key: ARGUS_CPU_THREADS
+        value: "1"

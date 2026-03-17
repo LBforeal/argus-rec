@@ -6,6 +6,7 @@ import threading
 import traceback
 import wave
 import subprocess
+import gc
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -46,23 +47,62 @@ _jobs_lock = threading.Lock()
 
 _executor = ThreadPoolExecutor(max_workers=1)
 
-_whisper_model = None
-_whisper_model_lock = threading.Lock()
 _ffmpeg_executable = None
 _ffmpeg_checked = False
 _ffmpeg_lock = threading.Lock()
 
 
-def _get_whisper_model():
-    global _whisper_model
-    with _whisper_model_lock:
-        if _whisper_model is None:
-            import whisper
-            model_name = os.getenv("ARGUS_WHISPER_MODEL")
-            if not model_name:
-                model_name = "tiny" if os.getenv("RENDER") else "base"
-            _whisper_model = whisper.load_model(model_name)
-        return _whisper_model
+def _transcribe_audio_with_light_backend(audio_data):
+    """
+    Memory-friendly transcription path for small cloud instances.
+    Uses faster-whisper by default; falls back to openai-whisper if installed.
+    """
+    model_name = os.getenv("ARGUS_WHISPER_MODEL")
+    if not model_name:
+        model_name = "tiny" if os.getenv("RENDER") else "base"
+
+    # Preferred backend: faster-whisper (lower memory footprint on CPU)
+    try:
+        from faster_whisper import WhisperModel
+
+        compute_type = os.getenv("ARGUS_COMPUTE_TYPE", "int8")
+        cpu_threads_env = os.getenv("ARGUS_CPU_THREADS")
+        cpu_threads = int(cpu_threads_env) if cpu_threads_env else (1 if os.getenv("RENDER") else 0)
+
+        model = WhisperModel(
+            model_name,
+            device="cpu",
+            compute_type=compute_type,
+            cpu_threads=cpu_threads if cpu_threads > 0 else 0,
+        )
+        segments, _info = model.transcribe(
+            audio_data,
+            beam_size=1,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        text = " ".join((seg.text or "").strip() for seg in segments).strip()
+
+        del model
+        gc.collect()
+        return text
+    except Exception:
+        pass
+
+    # Fallback backend: openai-whisper (if present in environment)
+    try:
+        import whisper
+        model = whisper.load_model(model_name)
+        result = model.transcribe(audio_data)
+        text = (result.get("text") or "").strip()
+        del model
+        gc.collect()
+        return text
+    except Exception as e:
+        raise RuntimeError(
+            "Не удалось запустить распознавание речи в текущем окружении. "
+            "Требуется установленный faster-whisper."
+        ) from e
 
 
 def _is_ffmpeg_usable(command: str) -> bool:
@@ -330,9 +370,7 @@ def _run_transcription(filename: str):
             diag["audio_open_error"] = f"{type(_oe).__name__}: {_oe}"
             raise
 
-        # ── STEP 2: load model ───────────────────────────────────
-        diag["step"] = "load_model"
-        model = _get_whisper_model()
+        # ── STEP 2: backend init is deferred until transcription ─
 
         # ── STEP 3: create temp file ─────────────────────────────
         diag["step"] = "mkstemp"
@@ -361,17 +399,17 @@ def _run_transcription(filename: str):
         diag["ffmpeg_executable"] = ffmpeg_executable or "none"
         if ffmpeg_executable:
             audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
-            result = model.transcribe(audio_data)
         else:
             if ext != ".wav":
                 raise RuntimeError(
                     "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
                 )
             wav_audio = _load_wav_for_whisper(tmp_path)
-            result = model.transcribe(wav_audio)
-        text = result["text"].strip()
+            audio_data = wav_audio
+        diag["step"] = "init_backend"
+        text = _transcribe_audio_with_light_backend(audio_data)
 
-        # ── STEP 6: write transcript ─────────────────────────────
+        # ── STEP 5: write transcript ─────────────────────────────
         diag["step"] = "write_transcript"
         with open(_transcript_path(filename), "w", encoding="utf-8") as f:
             f.write(text)
@@ -393,7 +431,7 @@ def _run_transcription(filename: str):
         )
         # Clean Russian message for the UI
         step = diag.get("step", "")
-        if step in ("", "load_model"):
+        if step in ("", "load_model", "init_backend"):
             user_msg = "Не удалось загрузить модель распознавания. Перезапустите сервер."
         elif step == "copy2":
             user_msg = "Нет доступа к аудиофайлу. Попробуйте ещё раз через несколько секунд."
