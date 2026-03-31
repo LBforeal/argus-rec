@@ -8,6 +8,11 @@ import wave
 import subprocess
 import gc
 import json
+import glob
+import time
+import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -106,6 +111,153 @@ def _transcribe_audio_with_light_backend(audio_data):
             "Не удалось запустить распознавание речи в текущем окружении. "
             "Требуется установленный faster-whisper."
         ) from e
+
+
+def _is_yandex_stt_configured() -> bool:
+    return bool((os.getenv("YC_API_KEY") or "").strip() and (os.getenv("YC_FOLDER_ID") or "").strip())
+
+
+def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
+    """
+    Cloud STT path for memory-limited instances:
+    1) split audio into short OggOpus chunks
+    2) send each chunk to Yandex SpeechKit sync API
+    3) concatenate recognized text
+    """
+    api_key = (os.getenv("YC_API_KEY") or "").strip()
+    folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
+    if not api_key or not folder_id:
+        raise RuntimeError("Yandex SpeechKit не настроен: отсутствует YC_API_KEY или YC_FOLDER_ID.")
+
+    if not ffmpeg_executable:
+        raise RuntimeError("Для облачной расшифровки нужен ffmpeg.")
+
+    lang = (os.getenv("YC_STT_LANG") or "ru-RU").strip()
+    topic = (os.getenv("YC_STT_TOPIC") or "general").strip()
+    bitrate = (os.getenv("YC_STT_BITRATE") or "24k").strip()
+    try:
+        chunk_seconds = int((os.getenv("YC_STT_CHUNK_SECONDS") or "25").strip())
+    except Exception:
+        chunk_seconds = 25
+    chunk_seconds = max(10, min(chunk_seconds, 30))
+
+    tmp_dir = tempfile.mkdtemp(prefix="argus_yc_stt_")
+    try:
+        chunk_pattern = os.path.join(tmp_dir, "chunk_%05d.ogg")
+        split_cmd = [
+            ffmpeg_executable,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            path,
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            bitrate,
+            "-vbr",
+            "on",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(chunk_seconds),
+            "-reset_timestamps",
+            "1",
+            chunk_pattern,
+        ]
+        try:
+            subprocess.run(split_cmd, capture_output=True, check=True)
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"Не удалось подготовить аудио для облачной расшифровки: {stderr[:240] or 'ошибка ffmpeg'}"
+            ) from e
+
+        chunks = sorted(glob.glob(os.path.join(tmp_dir, "chunk_*.ogg")))
+        if not chunks:
+            raise RuntimeError("Не удалось разделить аудио на фрагменты для облачной расшифровки.")
+
+        base_url = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
+        recognized_parts = []
+
+        for idx, chunk_path in enumerate(chunks, start=1):
+            with open(chunk_path, "rb") as f:
+                payload = f.read()
+            if not payload:
+                continue
+
+            params = urllib.parse.urlencode(
+                {
+                    "folderId": folder_id,
+                    "lang": lang,
+                    "topic": topic,
+                    "format": "oggopus",
+                }
+            )
+            req = urllib.request.Request(
+                f"{base_url}?{params}",
+                data=payload,
+                method="POST",
+                headers={
+                    "Authorization": f"Api-Key {api_key}",
+                    "Content-Type": "application/octet-stream",
+                },
+            )
+
+            last_err = None
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        body = (resp.read() or b"").decode("utf-8", errors="replace")
+                    data = json.loads(body) if body else {}
+                    if "error_code" in data or "error_message" in data:
+                        msg = str(data.get("error_message") or data.get("error_code") or "unknown error")
+                        raise RuntimeError(f"Yandex STT вернул ошибку на фрагменте {idx}: {msg}")
+                    part = (data.get("result") or "").strip()
+                    if part:
+                        recognized_parts.append(part)
+                    last_err = None
+                    break
+                except urllib.error.HTTPError as e:
+                    try:
+                        err_body = (e.read() or b"").decode("utf-8", errors="replace")
+                    except Exception:
+                        err_body = ""
+                    retryable = e.code in {429, 500, 502, 503, 504}
+                    last_err = RuntimeError(
+                        f"Yandex STT HTTP {e.code} на фрагменте {idx}: {err_body[:200] or e.reason}"
+                    )
+                    if retryable and attempt < 2:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    raise last_err
+                except urllib.error.URLError as e:
+                    last_err = RuntimeError(f"Сетевая ошибка Yandex STT на фрагменте {idx}: {e}")
+                    if attempt < 2:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    raise last_err
+                except Exception as e:
+                    last_err = RuntimeError(f"Ошибка Yandex STT на фрагменте {idx}: {e}")
+                    if attempt < 2:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    raise last_err
+
+            if last_err:
+                raise last_err
+
+        return " ".join(recognized_parts).strip()
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def _is_ffmpeg_usable(command: str) -> bool:
@@ -559,17 +711,22 @@ def _run_transcription(filename: str):
         diag["step"] = "transcribe"
         ffmpeg_executable = _resolve_ffmpeg_executable()
         diag["ffmpeg_executable"] = ffmpeg_executable or "none"
-        if ffmpeg_executable:
-            audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
+        diag["yandex_enabled"] = _is_yandex_stt_configured()
+        if diag["yandex_enabled"]:
+            diag["step"] = "transcribe_yandex"
+            text = _transcribe_audio_with_yandex(tmp_path, ffmpeg_executable)
         else:
-            if ext != ".wav":
-                raise RuntimeError(
-                    "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
-                )
-            wav_audio = _load_wav_for_whisper(tmp_path)
-            audio_data = wav_audio
-        diag["step"] = "init_backend"
-        text = _transcribe_audio_with_light_backend(audio_data)
+            if ffmpeg_executable:
+                audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
+            else:
+                if ext != ".wav":
+                    raise RuntimeError(
+                        "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
+                    )
+                wav_audio = _load_wav_for_whisper(tmp_path)
+                audio_data = wav_audio
+            diag["step"] = "init_backend"
+            text = _transcribe_audio_with_light_backend(audio_data)
 
         # ── STEP 5: write transcript ─────────────────────────────
         diag["step"] = "write_transcript"
@@ -597,7 +754,7 @@ def _run_transcription(filename: str):
             user_msg = "Не удалось загрузить модель распознавания. Перезапустите сервер."
         elif step == "copy2":
             user_msg = "Нет доступа к аудиофайлу. Попробуйте ещё раз через несколько секунд."
-        elif step == "transcribe":
+        elif step in ("transcribe", "transcribe_yandex"):
             if isinstance(e, RuntimeError):
                 user_msg = str(e)
             else:
