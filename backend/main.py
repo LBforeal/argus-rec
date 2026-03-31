@@ -711,8 +711,24 @@ def _run_transcription(filename: str):
         diag["ffmpeg_executable"] = ffmpeg_executable or "none"
         diag["yandex_enabled"] = _is_yandex_stt_configured()
         if diag["yandex_enabled"]:
-            diag["step"] = "transcribe_yandex"
-            text = _transcribe_audio_with_yandex(tmp_path, ffmpeg_executable)
+            try:
+                diag["step"] = "transcribe_yandex"
+                text = _transcribe_audio_with_yandex(tmp_path, ffmpeg_executable)
+            except Exception as yandex_err:
+                # Safe fallback: do not block transcription flow if cloud STT misconfigured.
+                diag["yandex_error"] = str(yandex_err)
+                print(f"[Yandex STT fallback] file={filename} error={yandex_err}", flush=True)
+                if ffmpeg_executable:
+                    audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
+                else:
+                    if ext != ".wav":
+                        raise RuntimeError(
+                            "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
+                        )
+                    wav_audio = _load_wav_for_whisper(tmp_path)
+                    audio_data = wav_audio
+                diag["step"] = "init_backend"
+                text = _transcribe_audio_with_light_backend(audio_data)
         else:
             if ffmpeg_executable:
                 audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
