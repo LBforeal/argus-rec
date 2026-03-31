@@ -114,7 +114,7 @@ def _transcribe_audio_with_light_backend(audio_data):
 
 
 def _is_yandex_stt_configured() -> bool:
-    return bool((os.getenv("YC_API_KEY") or "").strip() and (os.getenv("YC_FOLDER_ID") or "").strip())
+    return bool((os.getenv("YC_API_KEY") or "").strip())
 
 
 def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
@@ -125,9 +125,8 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
     3) concatenate recognized text
     """
     api_key = (os.getenv("YC_API_KEY") or "").strip()
-    folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
-    if not api_key or not folder_id:
-        raise RuntimeError("Yandex SpeechKit не настроен: отсутствует YC_API_KEY или YC_FOLDER_ID.")
+    if not api_key:
+        raise RuntimeError("Yandex SpeechKit не настроен: отсутствует YC_API_KEY.")
 
     if not ffmpeg_executable:
         raise RuntimeError("Для облачной расшифровки нужен ffmpeg.")
@@ -193,7 +192,6 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
 
             params = urllib.parse.urlencode(
                 {
-                    "folderId": folder_id,
                     "lang": lang,
                     "topic": topic,
                     "format": "oggopus",
