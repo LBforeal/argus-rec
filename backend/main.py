@@ -7,6 +7,8 @@ import traceback
 import wave
 import subprocess
 import gc
+import json
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +36,7 @@ TRANSCRIPT_SUFFIX = ".transcript.txt"
 OVERVIEW_SUFFIX = ".overview.txt"
 ACTIONS_SUFFIX = ".actions.json"
 EXPERT_SUFFIX = ".expert.json"
+DOCUMENT_SUFFIX = ".document.json"
 
 # ── TRANSCRIPTION STATE ──────────────────────────────────────
 
@@ -330,6 +333,165 @@ def _expert_path(filename: str) -> str:
     return os.path.join(RECORDINGS_DIR, filename + EXPERT_SUFFIX)
 
 
+def _document_path(filename: str) -> str:
+    return os.path.join(RECORDINGS_DIR, filename + DOCUMENT_SUFFIX)
+
+
+def _read_optional_text(path: str) -> str:
+    if not os.path.isfile(path):
+        return ""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def _read_optional_json(path: str, fallback):
+    if not os.path.isfile(path):
+        return fallback
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return fallback
+
+
+def _extract_sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text) if len(s.strip()) >= 10]
+
+
+def _find_first_sentence(text: str, keywords: list[str]) -> str:
+    sentences = _extract_sentences(text)
+    for sentence in sentences:
+        normalized = sentence.lower()
+        if any(keyword in normalized for keyword in keywords):
+            return sentence
+    return ""
+
+
+def _collect_scene_quotes(text: str, keywords: list[str], limit: int = 5) -> list[str]:
+    seen = set()
+    result = []
+    for sentence in _extract_sentences(text):
+        normalized = sentence.lower()
+        if not any(keyword in normalized for keyword in keywords):
+            continue
+        key = normalized.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(sentence)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _build_scene_document_payload(filename: str) -> dict:
+    transcript = _read_optional_text(_transcript_path(filename))
+    if not transcript:
+        raise RuntimeError("Транскрипт отсутствует.")
+
+    overview = _read_optional_text(_overview_path(filename))
+    actions_items = _read_optional_json(_actions_path(filename), [])
+    expert_report = _read_optional_json(_expert_path(filename), {})
+
+    date_match = re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", transcript)
+    time_match = re.search(r"\b\d{1,2}:\d{2}\b", transcript)
+
+    location = _find_first_sentence(
+        transcript,
+        ["адрес", "место", "квартира", "подъезд", "территор", "помещен", "комната"],
+    )
+    participants = _find_first_sentence(
+        transcript,
+        ["участ", "понят", "следоват", "сотрудник", "заявител", "свидетел", "оператив"],
+    )
+    findings = _collect_scene_quotes(
+        transcript,
+        ["обнаруж", "след", "предмет", "поврежден", "взлом", "осмотр", "место", "вещ"],
+        limit=6,
+    )
+    fixation = _collect_scene_quotes(
+        transcript,
+        ["фото", "видео", "зафиксир", "схем", "изъят", "упак", "опечат", "протокол"],
+        limit=6,
+    )
+
+    actions = [str(item).strip() for item in actions_items if str(item).strip()]
+    if not actions:
+        actions = _collect_scene_quotes(
+            transcript,
+            ["нужно", "надо", "следует", "обязательно", "сделать", "проверить", "оформить"],
+            limit=6,
+        )
+
+    expert_scenario = str(expert_report.get("scenario") or "").strip()
+    expert_match = str(expert_report.get("match_level") or "").strip()
+    expert_signs = [str(s).strip() for s in (expert_report.get("found_signs") or []) if str(s).strip()]
+
+    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    def _lines_from_list(items: list[str], fallback: str) -> list[str]:
+        if not items:
+            return [f"- {fallback}"]
+        return [f"- {item}" for item in items]
+
+    lines = [
+        "ЧЕРНОВИК ДОКУМЕНТА",
+        "Тип: Осмотр места (рабочая заготовка)",
+        f"Источник: аудиозапись \"{filename}\"",
+        f"Сформировано: {generated_at}",
+        "",
+        "Важно: документ собран только из реальной расшифровки записи и требует проверки человеком.",
+        "",
+        "1. Исходные сведения",
+        f"- Дата из записи: {date_match.group(0) if date_match else 'Не указано в записи'}",
+        f"- Время из записи: {time_match.group(0) if time_match else 'Не указано в записи'}",
+        f"- Место (фрагмент): {location if location else 'Не указано в записи'}",
+        f"- Участники (фрагмент): {participants if participants else 'Не указано в записи'}",
+        "",
+        "2. Обстоятельства и обнаруженные данные (цитаты из записи)",
+    ]
+    lines.extend(_lines_from_list(findings, "В записи не найдено явных формулировок по обстоятельствам/находкам."))
+    lines.append("")
+    lines.append("3. Фиксация и процессуальные действия (цитаты из записи)")
+    lines.extend(_lines_from_list(fixation, "В записи не найдено явных формулировок по фиксации/процессуальным действиям."))
+    lines.append("")
+    lines.append("4. Действия по итогам записи")
+    lines.extend(_lines_from_list(actions, "В записи не найдено явных поручений/действий."))
+    lines.append("")
+    lines.append("5. Дополнительные блоки из Argus")
+    lines.append(f"- Обзор: {overview if overview else 'Не сформирован'}")
+    lines.append(f"- Экспертный сценарий: {expert_scenario if expert_scenario else 'Не определен'}")
+    lines.append(f"- Уровень совпадения: {expert_match if expert_match else 'Не определен'}")
+    lines.append(
+        f"- Признаки сценария: {', '.join(expert_signs) if expert_signs else 'Не определены'}"
+    )
+    lines.append("")
+    lines.append("6. Служебная пометка")
+    lines.append("- Черновик не заменяет официальный процессуальный документ.")
+    lines.append("- Перед использованием требуется ручная проверка и редактирование.")
+
+    text = "\n".join(lines).strip()
+    return {
+        "template": "scene_inspection_draft_v1",
+        "filename": filename,
+        "generated_at": generated_at,
+        "text": text,
+        "fields": {
+            "date": date_match.group(0) if date_match else "",
+            "time": time_match.group(0) if time_match else "",
+            "location_quote": location,
+            "participants_quote": participants,
+            "findings_quotes": findings,
+            "fixation_quotes": fixation,
+            "actions": actions,
+            "overview": overview,
+            "expert_scenario": expert_scenario,
+            "expert_match_level": expert_match,
+            "expert_signs": expert_signs,
+        },
+    }
+
+
 def _run_expert(filename: str, analysis_mode: str | None = None):
     import json
     try:
@@ -483,7 +645,7 @@ def list_recordings():
     result = []
     for fname in os.listdir(RECORDINGS_DIR):
         fpath = os.path.join(RECORDINGS_DIR, fname)
-        if os.path.isfile(fpath) and not fname.endswith(TRANSCRIPT_SUFFIX) and not fname.endswith(OVERVIEW_SUFFIX) and not fname.endswith(ACTIONS_SUFFIX) and not fname.endswith(EXPERT_SUFFIX):
+        if os.path.isfile(fpath) and not fname.endswith(TRANSCRIPT_SUFFIX) and not fname.endswith(OVERVIEW_SUFFIX) and not fname.endswith(ACTIONS_SUFFIX) and not fname.endswith(EXPERT_SUFFIX) and not fname.endswith(DOCUMENT_SUFFIX):
             stat = os.stat(fpath)
             result.append({
                 "filename": fname,
@@ -532,6 +694,7 @@ def delete_recording(filename: str):
         _overview_path(filename),
         _actions_path(filename),
         _expert_path(filename),
+        _document_path(filename),
     ):
         try:
             if os.path.exists(path):
@@ -738,6 +901,52 @@ def get_expert(filename: str):
             return {"status": "error", "error": "Не удалось прочитать сохранённый отчёт. Попробуйте запустить анализ заново."}
 
     return {"status": "idle"}
+
+
+@app.post("/api/document/{filename}")
+def build_document(filename: str):
+    filename = os.path.basename(filename)
+    audio_path = os.path.join(RECORDINGS_DIR, filename)
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    tpath = _transcript_path(filename)
+    if not os.path.isfile(tpath):
+        return {"status": "no_transcript"}
+
+    try:
+        payload = _build_scene_document_payload(filename)
+        with open(_document_path(filename), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        return {"status": "done", "document": payload}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/api/document/{filename}")
+def get_document(filename: str):
+    filename = os.path.basename(filename)
+    audio_path = os.path.join(RECORDINGS_DIR, filename)
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    tpath = _transcript_path(filename)
+    if not os.path.isfile(tpath):
+        return {"status": "no_transcript"}
+
+    dpath = _document_path(filename)
+    if not os.path.isfile(dpath):
+        return {"status": "idle"}
+
+    try:
+        with open(dpath, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return {"status": "done", "document": payload}
+    except Exception:
+        return {
+            "status": "error",
+            "error": "Не удалось прочитать сохранённый черновик документа. Сформируйте заново.",
+        }
 
 
 # Static files must be mounted last

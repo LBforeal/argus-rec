@@ -380,6 +380,7 @@ function initDetail() {
   });
 
   _initAnalysisModeSelector();
+  _initDocumentGenerator(filename);
 
   // Обзор — активный таб по умолчанию, загружаем сразу
   _loadOverviewState(filename);
@@ -440,6 +441,73 @@ function _getSelectedAnalysisMode() {
   const value = document.getElementById('analysis-mode-value');
   const mode = (value?.textContent || '').trim();
   return mode || 'Следователь СК';
+}
+
+function _initDocumentGenerator(filename) {
+  const button = document.getElementById('btn-generate-document');
+  if (!button) return;
+  button.addEventListener('click', () => _generateDocument(filename, button));
+}
+
+function _setDocumentStatus(message, isError = false) {
+  const status = document.getElementById('detail-doc-status');
+  if (!status) return;
+  status.hidden = false;
+  status.classList.remove('detail-doc-status-error');
+  if (isError) status.classList.add('detail-doc-status-error');
+  status.textContent = message;
+}
+
+async function _generateDocument(filename, button) {
+  const baseLabel = 'Сформировать документ';
+  button.disabled = true;
+  button.textContent = 'Формируем...';
+  _setDocumentStatus('Сбор черновика документа из записи...');
+
+  try {
+    const res = await fetch(`/api/document/${encodeURIComponent(filename)}`, { method: 'POST' });
+    if (!res.ok) {
+      const message = await _extractApiError(res, 'Ошибка формирования документа');
+      throw new Error(message);
+    }
+
+    const data = await res.json();
+    if (data.status === 'no_transcript') {
+      _setDocumentStatus('Документ недоступен: сначала запустите и дождитесь готового транскрипта.', true);
+      return;
+    }
+    if (data.status !== 'done') {
+      _setDocumentStatus(`Не удалось сформировать документ: ${data.error || 'неизвестная ошибка'}`, true);
+      return;
+    }
+
+    const text = data?.document?.text || '';
+    if (!text.trim()) {
+      _setDocumentStatus('Документ сформирован без содержимого. Проверьте наличие данных в записи.', true);
+      return;
+    }
+
+    const safeName = String(filename).replace(/[\\/:*?"<>|]+/g, '_');
+    _downloadTextFile(`${safeName}.osmotr.chernovik.txt`, text);
+    _setDocumentStatus('Черновик документа сформирован и скачан.');
+  } catch (err) {
+    _setDocumentStatus(`Не удалось сформировать документ: ${err.message || err}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = baseLabel;
+  }
+}
+
+function _downloadTextFile(fileName, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ── TRANSCRIPT TAB ───────────────────────────────────────────

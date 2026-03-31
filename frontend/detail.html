@@ -58,14 +58,15 @@
           </div>
         </div>
         <button
+          id="btn-generate-document"
           class="btn detail-doc-btn"
           type="button"
-          disabled
-          title="Функция будет добавлена позже"
+          title="Сформировать черновик документа из записи"
         >
           Сформировать документ
         </button>
       </section>
+      <div id="detail-doc-status" class="detail-doc-status hidden" aria-live="polite"></div>
 
       <div class="player-wrap detail-player-wrap">
         <audio id="audio-player" controls></audio>
