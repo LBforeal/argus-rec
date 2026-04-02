@@ -13,6 +13,7 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+import hashlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -114,12 +115,40 @@ def _transcribe_audio_with_light_backend(audio_data):
 
 
 def _is_yandex_stt_configured() -> bool:
-    return bool((os.getenv("YC_API_KEY") or "").strip())
+    return bool(_get_yc_api_key())
 
 
 def _is_yandex_stt_strict() -> bool:
     value = (os.getenv("YC_STT_STRICT") or "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
+
+
+def _get_yc_api_key() -> str:
+    """
+    Normalizes YC_API_KEY value from environment:
+    - trims whitespace and newlines
+    - strips wrapping quotes
+    - accepts accidental 'Api-Key <token>' format
+    """
+    raw = (os.getenv("YC_API_KEY") or "").strip()
+    if not raw:
+        return ""
+
+    key = raw.replace("\r", "").replace("\n", "").strip()
+
+    if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+        key = key[1:-1].strip()
+
+    if key.lower().startswith("api-key "):
+        key = key[8:].strip()
+
+    return key
+
+
+def _yc_key_fingerprint(api_key: str) -> str:
+    if not api_key:
+        return "empty"
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
 
 
 def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
@@ -129,9 +158,21 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
     2) send each chunk to Yandex SpeechKit sync API
     3) concatenate recognized text
     """
-    api_key = (os.getenv("YC_API_KEY") or "").strip()
+    api_key = _get_yc_api_key()
     if not api_key:
         raise RuntimeError("Yandex SpeechKit не настроен: отсутствует YC_API_KEY.")
+
+    # Render diagnostics without leaking secret key.
+    print(
+        "[Yandex STT auth] key_fp=%s key_len=%s cloud_id=%s folder_id=%s"
+        % (
+            _yc_key_fingerprint(api_key),
+            len(api_key),
+            (os.getenv("YC_CLOUD_ID") or "").strip(),
+            (os.getenv("YC_FOLDER_ID") or "").strip(),
+        ),
+        flush=True,
+    )
 
     if not ffmpeg_executable:
         raise RuntimeError("Для облачной расшифровки нужен ffmpeg.")
