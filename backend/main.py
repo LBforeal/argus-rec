@@ -247,9 +247,6 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                 "Authorization": f"Api-Key {api_key}",
                 "Content-Type": "application/octet-stream",
             }
-            folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
-            if folder_id:
-                request_headers["x-folder-id"] = folder_id
 
             req = urllib.request.Request(
                 f"{base_url}?{params}",
@@ -278,8 +275,9 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                     except Exception:
                         err_body = ""
                     retryable = e.code in {429, 500, 502, 503, 504}
+                    key_fp = _yc_key_fingerprint(api_key)
                     last_err = RuntimeError(
-                        f"Yandex STT HTTP {e.code} на фрагменте {idx}: {err_body[:200] or e.reason}"
+                        f"Yandex STT HTTP {e.code} на фрагменте {idx} (key_fp={key_fp}): {err_body[:240] or e.reason}"
                     )
                     if retryable and attempt < 2:
                         time.sleep(1.0 * (attempt + 1))
