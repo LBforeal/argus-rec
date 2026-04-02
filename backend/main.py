@@ -117,6 +117,11 @@ def _is_yandex_stt_configured() -> bool:
     return bool((os.getenv("YC_API_KEY") or "").strip())
 
 
+def _is_yandex_stt_strict() -> bool:
+    value = (os.getenv("YC_STT_STRICT") or "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
     """
     Cloud STT path for memory-limited instances:
@@ -383,6 +388,23 @@ _overview_jobs_lock = threading.Lock()
 
 def _overview_path(filename: str) -> str:
     return os.path.join(RECORDINGS_DIR, filename + OVERVIEW_SUFFIX)
+
+
+def _clear_derived_outputs(filename: str) -> None:
+    """Remove previous derived artifacts before a fresh transcription run."""
+    for path in (
+        _transcript_path(filename),
+        _overview_path(filename),
+        _actions_path(filename),
+        _expert_path(filename),
+        _document_path(filename),
+    ):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            # Non-fatal: new run can still proceed, and errors will surface if write fails later.
+            pass
 
 
 def _extract_overview(text: str) -> str:
@@ -715,9 +737,14 @@ def _run_transcription(filename: str):
                 diag["step"] = "transcribe_yandex"
                 text = _transcribe_audio_with_yandex(tmp_path, ffmpeg_executable)
             except Exception as yandex_err:
+                strict_yandex = _is_yandex_stt_strict()
+                diag["yandex_strict"] = strict_yandex
                 # Safe fallback: do not block transcription flow if cloud STT misconfigured.
                 diag["yandex_error"] = str(yandex_err)
                 print(f"[Yandex STT fallback] file={filename} error={yandex_err}", flush=True)
+                # In strict mode we stop here to avoid silently returning low-quality fallback text.
+                if strict_yandex:
+                    raise RuntimeError(f"Ошибка Yandex STT: {yandex_err}") from yandex_err
                 if ffmpeg_executable:
                     audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
                 else:
@@ -894,6 +921,14 @@ def start_transcription(filename: str):
     if not os.path.isfile(audio_path):
         raise HTTPException(status_code=404, detail="Файл не найден")
 
+    # Ensure a fresh run and avoid showing stale results from previous attempts.
+    _clear_derived_outputs(filename)
+    with _overview_jobs_lock:
+        _overview_jobs.pop(filename, None)
+    with _actions_jobs_lock:
+        _actions_jobs.pop(filename, None)
+    with _expert_jobs_lock:
+        _expert_jobs.pop(filename, None)
     with _jobs_lock:
         if _jobs.get(filename, {}).get("status") == "running":
             return {"status": "running"}

@@ -548,6 +548,14 @@ function _renderTranscriptState(data, filename, container) {
       container.innerHTML = `<div class="transcript-text">${escapeHtml(data.text)}</div>`;
     }
 
+    const rerunBtnHtml = `
+      <div class="transcript-actions">
+        <button class="btn btn-secondary" id="btn-rerun-transcript">Перезапустить расшифровку</button>
+      </div>
+    `;
+    container.innerHTML += rerunBtnHtml;
+    const rerunBtn = document.getElementById('btn-rerun-transcript');
+    if (rerunBtn) rerunBtn.addEventListener('click', () => _startTranscription(filename));
   } else if (data.status === 'error') {
     container.innerHTML = `
       <div class="empty-state error-text">Ошибка расшифровки: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
