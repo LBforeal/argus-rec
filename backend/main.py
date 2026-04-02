@@ -243,14 +243,19 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                     "format": "oggopus",
                 }
             )
+            request_headers = {
+                "Authorization": f"Api-Key {api_key}",
+                "Content-Type": "application/octet-stream",
+            }
+            folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
+            if folder_id:
+                request_headers["x-folder-id"] = folder_id
+
             req = urllib.request.Request(
                 f"{base_url}?{params}",
                 data=payload,
                 method="POST",
-                headers={
-                    "Authorization": f"Api-Key {api_key}",
-                    "Content-Type": "application/octet-stream",
-                },
+                headers=request_headers,
             )
 
             last_err = None
