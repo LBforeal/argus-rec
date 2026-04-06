@@ -60,6 +60,10 @@ _ffmpeg_executable = None
 _ffmpeg_checked = False
 _ffmpeg_lock = threading.Lock()
 
+_yc_cached_iam_token = None
+_yc_cached_iam_expiry_ts = 0.0
+_yc_iam_lock = threading.Lock()
+
 
 def _get_transcribe_language() -> str:
     # "auto" keeps language auto-detection, otherwise force language for better stability.
@@ -130,7 +134,7 @@ def _transcribe_audio_with_light_backend(audio_data):
 
 
 def _is_yandex_stt_configured() -> bool:
-    return bool(_get_yc_iam_token() or _get_yc_api_key())
+    return bool(_get_yc_iam_token() or _get_yc_service_account_key_data() or _get_yc_api_key())
 
 
 def _is_yandex_stt_strict() -> bool:
@@ -190,10 +194,142 @@ def _get_yc_iam_token() -> str:
     return token
 
 
+def _get_yc_service_account_key_data() -> dict | None:
+    """
+    Reads authorized service-account key JSON from:
+    - YC_SA_KEY_JSON: raw JSON string
+    - YC_SA_KEY_FILE: file path to JSON
+    Returns parsed dict or None.
+    """
+    raw_json = (os.getenv("YC_SA_KEY_JSON") or "").strip()
+    file_path = (os.getenv("YC_SA_KEY_FILE") or "").strip()
+
+    payload = ""
+    if raw_json:
+        payload = raw_json
+    elif file_path:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                payload = f.read()
+        except Exception as e:
+            raise RuntimeError(f"YC_SA_KEY_FILE не читается: {e}") from e
+    else:
+        return None
+
+    try:
+        data = json.loads(payload)
+    except Exception as e:
+        raise RuntimeError("Не удалось разобрать JSON сервисного ключа YC_SA_KEY_JSON/YC_SA_KEY_FILE.") from e
+
+    if not isinstance(data, dict):
+        raise RuntimeError("JSON сервисного ключа должен быть объектом.")
+
+    required_fields = ("id", "service_account_id", "private_key")
+    missing = [f for f in required_fields if not str(data.get(f) or "").strip()]
+    if missing:
+        raise RuntimeError(f"В JSON сервисного ключа отсутствуют поля: {', '.join(missing)}")
+
+    return data
+
+
 def _yc_secret_fingerprint(secret_value: str) -> str:
     if not secret_value:
         return "empty"
     return hashlib.sha256(secret_value.encode("utf-8")).hexdigest()[:12]
+
+
+def _parse_iso8601_to_ts(value: str) -> float:
+    if not value:
+        return 0.0
+    value = value.strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _build_yc_sa_jwt(sa_key: dict) -> str:
+    try:
+        import jwt
+    except Exception as e:
+        raise RuntimeError(
+            "Для авторизации через YC_SA_KEY_JSON нужен пакет PyJWT[crypto]."
+        ) from e
+
+    now = int(time.time())
+    payload = {
+        "aud": "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+        "iss": sa_key["service_account_id"],
+        "iat": now - 5,
+        "exp": now + 3600,
+    }
+    headers = {
+        "kid": sa_key["id"],
+        "typ": "JWT",
+    }
+    token = jwt.encode(payload, sa_key["private_key"], algorithm="PS256", headers=headers)
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
+
+
+def _exchange_yc_sa_jwt_for_iam_token(sa_jwt: str) -> tuple[str, float]:
+    req = urllib.request.Request(
+        "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+        data=json.dumps({"jwt": sa_jwt}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = (resp.read() or b"").decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = (e.read() or b"").decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        raise RuntimeError(f"IAM token exchange HTTP {e.code}: {err_body[:240] or e.reason}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Сетевая ошибка при получении IAM токена: {e}") from e
+
+    try:
+        data = json.loads(body) if body else {}
+    except Exception as e:
+        raise RuntimeError("Не удалось разобрать ответ IAM token exchange.") from e
+
+    token = str(data.get("iamToken") or "").strip()
+    if not token:
+        msg = str(data.get("message") or data.get("error_message") or "iamToken отсутствует в ответе")
+        raise RuntimeError(f"IAM token exchange failed: {msg}")
+
+    expires_at = str(data.get("expiresAt") or "").strip()
+    expiry_ts = _parse_iso8601_to_ts(expires_at)
+    if not expiry_ts:
+        # Conservative fallback: 55 minutes cache window.
+        expiry_ts = time.time() + 55 * 60
+    return token, expiry_ts
+
+
+def _get_or_refresh_yc_iam_token_from_service_account() -> str:
+    global _yc_cached_iam_token, _yc_cached_iam_expiry_ts
+
+    sa_key = _get_yc_service_account_key_data()
+    if not sa_key:
+        return ""
+
+    with _yc_iam_lock:
+        now = time.time()
+        # Refresh 2 minutes before expiry.
+        if _yc_cached_iam_token and (_yc_cached_iam_expiry_ts - now) > 120:
+            return _yc_cached_iam_token
+
+        sa_jwt = _build_yc_sa_jwt(sa_key)
+        token, expiry_ts = _exchange_yc_sa_jwt_for_iam_token(sa_jwt)
+        _yc_cached_iam_token = token
+        _yc_cached_iam_expiry_ts = expiry_ts
+        return token
 
 
 def _get_yandex_auth_header() -> tuple[str, str, str, int]:
@@ -213,6 +349,15 @@ def _get_yandex_auth_header() -> tuple[str, str, str, int]:
             len(iam_token),
         )
 
+    sa_iam_token = _get_or_refresh_yc_iam_token_from_service_account()
+    if sa_iam_token:
+        return (
+            f"Bearer {sa_iam_token}",
+            "sa_iam_token",
+            _yc_secret_fingerprint(sa_iam_token),
+            len(sa_iam_token),
+        )
+
     api_key = _get_yc_api_key()
     if api_key:
         return (
@@ -222,7 +367,9 @@ def _get_yandex_auth_header() -> tuple[str, str, str, int]:
             len(api_key),
         )
 
-    raise RuntimeError("Yandex SpeechKit не настроен: отсутствуют YC_IAM_TOKEN и YC_API_KEY.")
+    raise RuntimeError(
+        "Yandex SpeechKit не настроен: отсутствуют YC_IAM_TOKEN, YC_SA_KEY_JSON/YC_SA_KEY_FILE и YC_API_KEY."
+    )
 
 
 def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
@@ -253,6 +400,7 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
     lang = (os.getenv("YC_STT_LANG") or "ru-RU").strip()
     topic = (os.getenv("YC_STT_TOPIC") or "general").strip()
     bitrate = (os.getenv("YC_STT_BITRATE") or "24k").strip()
+    folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
     try:
         chunk_seconds = int((os.getenv("YC_STT_CHUNK_SECONDS") or "25").strip())
     except Exception:
@@ -314,6 +462,7 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                     "lang": lang,
                     "topic": topic,
                     "format": "oggopus",
+                    **({"folderId": folder_id} if folder_id else {}),
                 }
             )
             request_headers = {

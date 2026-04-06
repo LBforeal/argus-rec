@@ -26,26 +26,47 @@
 - Updated `render.yaml` defaults:
   - `YC_STT_STRICT="0"`
   - `ARGUS_TRANSCRIBE_LANGUAGE=ru`
+- Validation pass (no logic changes):
+  - `python -m compileall backend/main.py backend/ai_module.py` passed
+  - `python -c "import backend.main; import backend.ai_module"` passed (`import_ok`)
+  - `render.yaml` parsed successfully via `yaml.safe_load` (`yaml_ok`)
+  - merge-conflict markers scan returned no matches
+- Updated Yandex STT auth strategy in `backend/main.py`:
+  - added support for authorized service account key (`YC_SA_KEY_JSON` or `YC_SA_KEY_FILE`)
+  - implemented automatic IAM token mint/refresh via `https://iam.api.cloud.yandex.net/iam/v1/tokens`
+  - auth selection order is now:
+    1) `YC_IAM_TOKEN`
+    2) service-account generated IAM token
+    3) `YC_API_KEY`
+  - added `folderId` injection into STT recognize request when `YC_FOLDER_ID` is set
+- Updated `requirements.txt`:
+  - added `PyJWT[crypto]` for service-account JWT signing
 
 ## Not changed in this step
 - Backend files except `backend/main.py` not changed.
 - Frontend/UI (`frontend/*`) not changed.
 - Deployment config updated only in `render.yaml` env defaults for STT stability.
+- During validation pass: no new code/config edits were made.
+- Frontend/UI (`frontend/*`) still unchanged.
 
 ## Risks
 - Chat memory can still be lost between sessions, but source-of-truth files now exist in repo.
 - If handoff is not updated after future work, continuity will degrade.
 - If both Yandex auth methods are invalid and fallback backend is unavailable in environment, transcript can still fail.
 - Non-strict mode may produce fallback transcription quality lower than cloud STT during Yandex outages.
+- Frontend JS syntax was not auto-checked because `node` is unavailable in this environment.
+- Service-account mode requires valid YC authorized key JSON with fields: `id`, `service_account_id`, `private_key`.
 
 ## Exact next step
 1. Wait for Render auto-deploy of commit `61c1905` (or run Manual Deploy if auto-deploy disabled).
 2. In Render env set (recommended):
-   - `YC_IAM_TOKEN` (preferred) or valid `YC_API_KEY`
+   - preferred: `YC_SA_KEY_JSON` (full authorized key JSON string) and `YC_FOLDER_ID`
+   - optional alternatives: `YC_IAM_TOKEN` or valid `YC_API_KEY`
    - `YC_STT_STRICT=0`
    - `ARGUS_TRANSCRIBE_LANGUAGE=ru`
 3. Run one real-audio transcription test and capture one log line with `[Yandex STT auth]`.
 4. Record real test outcome and remaining issue (if any) in this file.
+5. Optional: install Node locally and run `node --check frontend/app.js` for extra frontend syntax verification.
 
 ---
 
