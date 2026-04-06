@@ -2,7 +2,8 @@
 
 ## Current snapshot
 - Date: 2026-04-06
-- Branch: (check with `git branch --show-current` before work)
+- Branch: `ui-redesign-demo`
+- Latest pushed commit: `61c1905` (`origin/ui-redesign-demo`)
 - Goal now: stabilize production-ready short release for demo/sales without breaking existing recorder core.
 
 ## Last confirmed context
@@ -38,7 +39,7 @@
 - Non-strict mode may produce fallback transcription quality lower than cloud STT during Yandex outages.
 
 ## Exact next step
-1. Deploy latest commit to Render.
+1. Wait for Render auto-deploy of commit `61c1905` (or run Manual Deploy if auto-deploy disabled).
 2. In Render env set (recommended):
    - `YC_IAM_TOKEN` (preferred) or valid `YC_API_KEY`
    - `YC_STT_STRICT=0`
