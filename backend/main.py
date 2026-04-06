@@ -142,6 +142,11 @@ def _get_yc_api_key() -> str:
     if key.lower().startswith("api-key "):
         key = key[8:].strip()
 
+    # Remove invisible Unicode format chars often introduced by copy/paste
+    # from web UIs (e.g. U+200B zero-width space), and collapse whitespace.
+    key = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", key)
+    key = "".join(key.split())
+
     return key
 
 
