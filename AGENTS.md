@@ -34,3 +34,14 @@ Workflow rules:
 - No fake summaries.
 - No fake expert reasoning.
 - If a backend or processing step is not implemented yet, do not simulate final AI results.
+
+Context continuity rules:
+- Do not rely on chat memory as source of truth.
+- Before starting work in any new chat, read:
+  - `knowledge/PROJECT_MEMORY.md`
+  - `knowledge/HANDOFF.md`
+- After each meaningful step, update `knowledge/HANDOFF.md` with:
+  - what changed
+  - what did not change
+  - risks
+  - exact next step

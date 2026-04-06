@@ -61,6 +61,12 @@ _ffmpeg_checked = False
 _ffmpeg_lock = threading.Lock()
 
 
+def _get_transcribe_language() -> str:
+    # "auto" keeps language auto-detection, otherwise force language for better stability.
+    lang = (os.getenv("ARGUS_TRANSCRIBE_LANGUAGE") or "ru").strip().lower()
+    return lang or "ru"
+
+
 def _transcribe_audio_with_light_backend(audio_data):
     """
     Memory-friendly transcription path for small cloud instances.
@@ -69,6 +75,8 @@ def _transcribe_audio_with_light_backend(audio_data):
     model_name = os.getenv("ARGUS_WHISPER_MODEL")
     if not model_name:
         model_name = "tiny" if os.getenv("RENDER") else "base"
+
+    language = _get_transcribe_language()
 
     # Preferred backend: faster-whisper (lower memory footprint on CPU)
     try:
@@ -84,12 +92,16 @@ def _transcribe_audio_with_light_backend(audio_data):
             compute_type=compute_type,
             cpu_threads=cpu_threads if cpu_threads > 0 else 0,
         )
-        segments, _info = model.transcribe(
-            audio_data,
-            beam_size=1,
-            vad_filter=True,
-            condition_on_previous_text=False,
-        )
+        transcribe_kwargs = {
+            "beam_size": 1,
+            "vad_filter": True,
+            "condition_on_previous_text": False,
+            "task": "transcribe",
+        }
+        if language != "auto":
+            transcribe_kwargs["language"] = language
+
+        segments, _info = model.transcribe(audio_data, **transcribe_kwargs)
         text = " ".join((seg.text or "").strip() for seg in segments).strip()
 
         del model
@@ -102,7 +114,10 @@ def _transcribe_audio_with_light_backend(audio_data):
     try:
         import whisper
         model = whisper.load_model(model_name)
-        result = model.transcribe(audio_data)
+        transcribe_kwargs = {"task": "transcribe"}
+        if language != "auto":
+            transcribe_kwargs["language"] = language
+        result = model.transcribe(audio_data, **transcribe_kwargs)
         text = (result.get("text") or "").strip()
         del model
         gc.collect()
@@ -115,11 +130,12 @@ def _transcribe_audio_with_light_backend(audio_data):
 
 
 def _is_yandex_stt_configured() -> bool:
-    return bool(_get_yc_api_key())
+    return bool(_get_yc_iam_token() or _get_yc_api_key())
 
 
 def _is_yandex_stt_strict() -> bool:
-    value = (os.getenv("YC_STT_STRICT") or "1").strip().lower()
+    # Default non-strict to keep transcription flow alive even when Yandex auth is broken.
+    value = (os.getenv("YC_STT_STRICT") or "0").strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
@@ -150,10 +166,63 @@ def _get_yc_api_key() -> str:
     return key
 
 
-def _yc_key_fingerprint(api_key: str) -> str:
-    if not api_key:
+def _get_yc_iam_token() -> str:
+    """
+    Normalizes YC_IAM_TOKEN value from environment:
+    - trims whitespace and newlines
+    - strips wrapping quotes
+    - accepts accidental 'Bearer <token>' format
+    """
+    raw = (os.getenv("YC_IAM_TOKEN") or "").strip()
+    if not raw:
+        return ""
+
+    token = raw.replace("\r", "").replace("\n", "").strip()
+
+    if (token.startswith('"') and token.endswith('"')) or (token.startswith("'") and token.endswith("'")):
+        token = token[1:-1].strip()
+
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+
+    token = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", token)
+    token = "".join(token.split())
+    return token
+
+
+def _yc_secret_fingerprint(secret_value: str) -> str:
+    if not secret_value:
         return "empty"
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(secret_value.encode("utf-8")).hexdigest()[:12]
+
+
+def _get_yandex_auth_header() -> tuple[str, str, str, int]:
+    """
+    Returns tuple:
+    - full Authorization header value
+    - auth mode label ("iam_token" | "api_key")
+    - fingerprint (safe to log)
+    - secret length (safe to log)
+    """
+    iam_token = _get_yc_iam_token()
+    if iam_token:
+        return (
+            f"Bearer {iam_token}",
+            "iam_token",
+            _yc_secret_fingerprint(iam_token),
+            len(iam_token),
+        )
+
+    api_key = _get_yc_api_key()
+    if api_key:
+        return (
+            f"Api-Key {api_key}",
+            "api_key",
+            _yc_secret_fingerprint(api_key),
+            len(api_key),
+        )
+
+    raise RuntimeError("Yandex SpeechKit не настроен: отсутствуют YC_IAM_TOKEN и YC_API_KEY.")
 
 
 def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
@@ -163,16 +232,15 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
     2) send each chunk to Yandex SpeechKit sync API
     3) concatenate recognized text
     """
-    api_key = _get_yc_api_key()
-    if not api_key:
-        raise RuntimeError("Yandex SpeechKit не настроен: отсутствует YC_API_KEY.")
+    auth_header, auth_mode, auth_fp, auth_len = _get_yandex_auth_header()
 
     # Render diagnostics without leaking secret key.
     print(
-        "[Yandex STT auth] key_fp=%s key_len=%s cloud_id=%s folder_id=%s"
+        "[Yandex STT auth] mode=%s fp=%s len=%s cloud_id=%s folder_id=%s"
         % (
-            _yc_key_fingerprint(api_key),
-            len(api_key),
+            auth_mode,
+            auth_fp,
+            auth_len,
             (os.getenv("YC_CLOUD_ID") or "").strip(),
             (os.getenv("YC_FOLDER_ID") or "").strip(),
         ),
@@ -249,7 +317,7 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                 }
             )
             request_headers = {
-                "Authorization": f"Api-Key {api_key}",
+                "Authorization": auth_header,
                 "Content-Type": "application/octet-stream",
             }
 
@@ -280,9 +348,9 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
                     except Exception:
                         err_body = ""
                     retryable = e.code in {429, 500, 502, 503, 504}
-                    key_fp = _yc_key_fingerprint(api_key)
                     last_err = RuntimeError(
-                        f"Yandex STT HTTP {e.code} на фрагменте {idx} (key_fp={key_fp}): {err_body[:240] or e.reason}"
+                        f"Yandex STT HTTP {e.code} на фрагменте {idx} "
+                        f"(auth={auth_mode}, fp={auth_fp}): {err_body[:240] or e.reason}"
                     )
                     if retryable and attempt < 2:
                         time.sleep(1.0 * (attempt + 1))

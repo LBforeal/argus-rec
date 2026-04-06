@@ -17,3 +17,7 @@ services:
         value: int8
       - key: ARGUS_CPU_THREADS
         value: "1"
+      - key: YC_STT_STRICT
+        value: "0"
+      - key: ARGUS_TRANSCRIBE_LANGUAGE
+        value: ru
