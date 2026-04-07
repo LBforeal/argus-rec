@@ -55,6 +55,19 @@
   - `_is_yandex_stt_configured` now checks only env presence (no risky JSON parsing at start)
   - if service-account auth config is broken, backend logs warning and falls back to `YC_API_KEY` path
   - this prevents transcription start failure from malformed `YC_SA_KEY_JSON`
+- Updated STT quality tuning in `backend/main.py`:
+  - default local model switched to `base` (instead of tiny fallback on Render)
+  - stronger decoding defaults for faster-whisper:
+    - `beam_size=5` (env `ARGUS_BEAM_SIZE`)
+    - `condition_on_previous_text=1` (env `ARGUS_CONDITION_ON_PREV_TEXT`)
+    - domain initial prompt for Russian ДТП/legal vocabulary
+  - stronger openai-whisper fallback settings (`beam_size=5`, `best_of=5`, deterministic decode)
+  - Yandex chunk bitrate default raised to `64k` (`YC_STT_BITRATE`)
+- Updated `render.yaml` with STT quality env defaults:
+  - `ARGUS_BEAM_SIZE=5`
+  - `ARGUS_CONDITION_ON_PREV_TEXT=1`
+  - `ARGUS_VAD_FILTER=1`
+  - `YC_STT_BITRATE=64k`
 
 ## Not changed in this step
 - Backend files except `backend/main.py` not changed.
@@ -73,6 +86,7 @@
 - Service-account mode requires valid YC authorized key JSON with fields: `id`, `service_account_id`, `private_key`.
 - ДТП field extraction is quote/rule-based and may leave fields empty if they are not present in transcript.
 - If only broken service-account config exists and no API key/IAM token is provided, Yandex path fails and fallback model is used in non-strict mode.
+- Higher quality decode can increase transcription latency slightly.
 
 ## Exact next step
 1. Wait for Render auto-deploy of commit `3fbe2db` (or run Manual Deploy if auto-deploy disabled).

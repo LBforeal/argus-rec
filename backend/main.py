@@ -78,7 +78,8 @@ def _transcribe_audio_with_light_backend(audio_data):
     """
     model_name = os.getenv("ARGUS_WHISPER_MODEL")
     if not model_name:
-        model_name = "tiny" if os.getenv("RENDER") else "base"
+        # Better default quality for Russian legal/business speech.
+        model_name = "base"
 
     language = _get_transcribe_language()
 
@@ -96,11 +97,31 @@ def _transcribe_audio_with_light_backend(audio_data):
             compute_type=compute_type,
             cpu_threads=cpu_threads if cpu_threads > 0 else 0,
         )
+        try:
+            beam_size = int((os.getenv("ARGUS_BEAM_SIZE") or "5").strip())
+        except Exception:
+            beam_size = 5
+        beam_size = max(1, min(beam_size, 10))
+
+        condition_on_previous_text = (os.getenv("ARGUS_CONDITION_ON_PREV_TEXT") or "1").strip().lower()
+        use_prev_context = condition_on_previous_text not in {"0", "false", "no", "off"}
+
+        vad_env = (os.getenv("ARGUS_VAD_FILTER") or "1").strip().lower()
+        use_vad = vad_env not in {"0", "false", "no", "off"}
+
+        initial_prompt = (os.getenv("ARGUS_INITIAL_PROMPT") or "").strip()
+        if not initial_prompt:
+            initial_prompt = (
+                "Русская речь. Протокол и извещение о ДТП. "
+                "Распознавай точно: ФИО, даты, время, адреса, госномера, марки автомобилей."
+            )
+
         transcribe_kwargs = {
-            "beam_size": 1,
-            "vad_filter": True,
-            "condition_on_previous_text": False,
+            "beam_size": beam_size,
+            "vad_filter": use_vad,
+            "condition_on_previous_text": use_prev_context,
             "task": "transcribe",
+            "initial_prompt": initial_prompt,
         }
         if language != "auto":
             transcribe_kwargs["language"] = language
@@ -118,7 +139,17 @@ def _transcribe_audio_with_light_backend(audio_data):
     try:
         import whisper
         model = whisper.load_model(model_name)
-        transcribe_kwargs = {"task": "transcribe"}
+        transcribe_kwargs = {
+            "task": "transcribe",
+            "temperature": 0.0,
+            "best_of": 5,
+            "beam_size": 5,
+            "condition_on_previous_text": True,
+            "initial_prompt": (
+                "Русская речь. Протокол и извещение о ДТП. "
+                "Распознавай точно: ФИО, даты, время, адреса, госномера, марки автомобилей."
+            ),
+        }
         if language != "auto":
             transcribe_kwargs["language"] = language
         result = model.transcribe(audio_data, **transcribe_kwargs)
@@ -409,7 +440,7 @@ def _transcribe_audio_with_yandex(path: str, ffmpeg_executable: str) -> str:
 
     lang = (os.getenv("YC_STT_LANG") or "ru-RU").strip()
     topic = (os.getenv("YC_STT_TOPIC") or "general").strip()
-    bitrate = (os.getenv("YC_STT_BITRATE") or "24k").strip()
+    bitrate = (os.getenv("YC_STT_BITRATE") or "64k").strip()
     folder_id = (os.getenv("YC_FOLDER_ID") or "").strip()
     try:
         chunk_seconds = int((os.getenv("YC_STT_CHUNK_SECONDS") or "25").strip())

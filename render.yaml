@@ -17,7 +17,15 @@ services:
         value: int8
       - key: ARGUS_CPU_THREADS
         value: "1"
+      - key: ARGUS_BEAM_SIZE
+        value: "5"
+      - key: ARGUS_CONDITION_ON_PREV_TEXT
+        value: "1"
+      - key: ARGUS_VAD_FILTER
+        value: "1"
       - key: YC_STT_STRICT
         value: "0"
       - key: ARGUS_TRANSCRIBE_LANGUAGE
         value: ru
+      - key: YC_STT_BITRATE
+        value: 64k
