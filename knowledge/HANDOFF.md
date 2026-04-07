@@ -41,6 +41,15 @@
   - added `folderId` injection into STT recognize request when `YC_FOLDER_ID` is set
 - Updated `requirements.txt`:
   - added `PyJWT[crypto]` for service-account JWT signing
+- Updated `backend/main.py` document generation:
+  - added auto-detection for ДТП transcript (`_is_dtp_transcript`)
+  - added ДТП document builder (`_build_dtp_document_payload`)
+  - new template: `dtp_notice_837p_draft_v1`
+  - official basis stored in payload fields:
+    - `official_basis`: Приложение 3 к Положению Банка России N 837-П
+  - `/api/document/{filename}` now uses `_build_document_payload`:
+    - ДТП transcript -> ДТП template
+    - otherwise -> existing scene template
 
 ## Not changed in this step
 - Backend files except `backend/main.py` not changed.
@@ -48,6 +57,7 @@
 - Deployment config updated only in `render.yaml` env defaults for STT stability.
 - During validation pass: no new code/config edits were made.
 - Frontend/UI (`frontend/*`) still unchanged.
+- No tab/navigation changes; endpoint contract preserved.
 
 ## Risks
 - Chat memory can still be lost between sessions, but source-of-truth files now exist in repo.
@@ -56,6 +66,7 @@
 - Non-strict mode may produce fallback transcription quality lower than cloud STT during Yandex outages.
 - Frontend JS syntax was not auto-checked because `node` is unavailable in this environment.
 - Service-account mode requires valid YC authorized key JSON with fields: `id`, `service_account_id`, `private_key`.
+- ДТП field extraction is quote/rule-based and may leave fields empty if they are not present in transcript.
 
 ## Exact next step
 1. Wait for Render auto-deploy of commit `61c1905` (or run Manual Deploy if auto-deploy disabled).
@@ -67,6 +78,9 @@
 3. Run one real-audio transcription test and capture one log line with `[Yandex STT auth]`.
 4. Record real test outcome and remaining issue (if any) in this file.
 5. Optional: install Node locally and run `node --check frontend/app.js` for extra frontend syntax verification.
+6. Run one real ДТП conversation audio and call `POST /api/document/{filename}`:
+   - verify template is `dtp_notice_837p_draft_v1`
+   - verify fields are filled only from transcript quotes.
 
 ---
 

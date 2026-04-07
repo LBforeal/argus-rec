@@ -822,6 +822,206 @@ def _collect_scene_quotes(text: str, keywords: list[str], limit: int = 5) -> lis
     return result
 
 
+_DTP_MARKERS = re.compile(
+    r"(?:дтп|авари|столкнов|виновник|пострадав|потерпев|гибдд|светофор|перекрест|машин|автомобил)",
+    re.IGNORECASE,
+)
+
+_RUS_FULL_NAME_RE = re.compile(r"\b[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2}\b")
+
+
+def _is_dtp_transcript(text: str) -> bool:
+    return bool(_DTP_MARKERS.search(text or ""))
+
+
+def _extract_person_names(text: str, limit: int = 8) -> list[str]:
+    seen = set()
+    result = []
+    for name in _RUS_FULL_NAME_RE.findall(text or ""):
+        normalized = re.sub(r"\s+", " ", name).strip()
+        if not normalized:
+            continue
+        low = normalized.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        result.append(normalized)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _extract_role_name(text: str, role_keywords: list[str]) -> tuple[str, str]:
+    for sentence in _extract_sentences(text):
+        normalized = sentence.lower()
+        if not any(keyword in normalized for keyword in role_keywords):
+            continue
+        names = _extract_person_names(sentence, limit=2)
+        if names:
+            return names[0], sentence
+    return "", ""
+
+
+def _build_dtp_document_payload(filename: str) -> dict:
+    transcript = _read_optional_text(_transcript_path(filename))
+    if not transcript:
+        raise RuntimeError("Транскрипт отсутствует.")
+
+    overview = _read_optional_text(_overview_path(filename))
+    actions_items = _read_optional_json(_actions_path(filename), [])
+    expert_report = _read_optional_json(_expert_path(filename), {})
+
+    date_match = re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", transcript)
+    time_match = re.search(r"\b\d{1,2}:\d{2}\b", transcript)
+
+    location = _find_first_sentence(
+        transcript,
+        ["место", "дтп", "авар", "перекрест", "улиц", "проспект", "трасс", "дорог", "дом"],
+    )
+    witnesses = _find_first_sentence(
+        transcript,
+        ["свидетел", "очевид", "видел", "видела", "наблюдал"],
+    )
+
+    culprit_name, culprit_quote = _extract_role_name(
+        transcript, ["виновник", "виноват", "нарушил", "признал вину"]
+    )
+    victim_name, victim_quote = _extract_role_name(
+        transcript, ["пострадавш", "потерпевш", "второй водитель", "второй участник"]
+    )
+    all_names = _extract_person_names(transcript, limit=8)
+    if not culprit_name and all_names:
+        culprit_name = all_names[0]
+    if not victim_name and len(all_names) > 1:
+        victim_name = all_names[1]
+
+    vehicles_quotes = _collect_scene_quotes(
+        transcript,
+        ["автомобил", "машин", "марк", "модел", "госномер", "номер", "водитель"],
+        limit=6,
+    )
+    circumstances_quotes = _collect_scene_quotes(
+        transcript,
+        ["дтп", "авар", "столкнов", "двигал", "поворот", "перекрест", "тормоз", "светофор", "полос"],
+        limit=8,
+    )
+    damage_quotes = _collect_scene_quotes(
+        transcript,
+        ["поврежден", "вмят", "царап", "бампер", "крыл", "фара", "двер", "капот", "лобов"],
+        limit=6,
+    )
+    injury_quotes = _collect_scene_quotes(
+        transcript,
+        ["пострад", "травм", "боль", "скорая", "госпитал", "ушиб"],
+        limit=4,
+    )
+    disagreement_quotes = _collect_scene_quotes(
+        transcript,
+        ["не согласен", "оспари", "вина", "нарушил", "разноглас"],
+        limit=4,
+    )
+
+    actions = [str(item).strip() for item in actions_items if str(item).strip()]
+    if not actions:
+        actions = _collect_scene_quotes(
+            transcript,
+            ["нужно", "надо", "следует", "оформить", "вызвать", "передать", "проверить"],
+            limit=6,
+        )
+
+    expert_scenario = str(expert_report.get("scenario") or "").strip()
+    expert_match = str(expert_report.get("match_level") or "").strip()
+    expert_signs = [str(s).strip() for s in (expert_report.get("found_signs") or []) if str(s).strip()]
+
+    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    def _lines_from_list(items: list[str], fallback: str) -> list[str]:
+        if not items:
+            return [f"- {fallback}"]
+        return [f"- {item}" for item in items]
+
+    lines = [
+        "ЧЕРНОВИК ИЗВЕЩЕНИЯ О ДОРОЖНО-ТРАНСПОРТНОМ ПРОИСШЕСТВИИ",
+        "Основа формы: Приложение 3 к Положению Банка России от 01.04.2024 N 837-П",
+        f"Источник: аудиозапись \"{filename}\"",
+        f"Сформировано: {generated_at}",
+        "",
+        "Важно: документ собран только из реальной расшифровки записи и требует проверки человеком.",
+        "",
+        "1. Место ДТП",
+        f"- {location if location else 'Не указано в записи'}",
+        "",
+        "2. Дата и время ДТП",
+        f"- Дата: {date_match.group(0) if date_match else 'Не указано в записи'}",
+        f"- Время: {time_match.group(0) if time_match else 'Не указано в записи'}",
+        "",
+        "3. Свидетели ДТП",
+        f"- {witnesses if witnesses else 'Не указано в записи'}",
+        "",
+        "4. Участники ДТП",
+        f"- ТС A (предположительно виновник): {culprit_name if culprit_name else 'Не определено из записи'}",
+        f"- ТС B (предположительно пострадавший): {victim_name if victim_name else 'Не определено из записи'}",
+        "",
+        "5. Данные об автомобилях (цитаты)",
+    ]
+    lines.extend(_lines_from_list(vehicles_quotes, "В записи не найдено явных данных по ТС/госномеру."))
+    lines.append("")
+    lines.append("6. Обстоятельства ДТП (цитаты)")
+    lines.extend(_lines_from_list(circumstances_quotes, "В записи не найдено явных формулировок по обстоятельствам ДТП."))
+    lines.append("")
+    lines.append("7. Видимые повреждения ТС (цитаты)")
+    lines.extend(_lines_from_list(damage_quotes, "В записи не найдено явных формулировок по повреждениям ТС."))
+    lines.append("")
+    lines.append("8. Сведения о пострадавших (цитаты)")
+    lines.extend(_lines_from_list(injury_quotes, "В записи не найдено явных сведений о травмах/пострадавших."))
+    lines.append("")
+    lines.append("9. Разногласия участников (цитаты)")
+    lines.extend(_lines_from_list(disagreement_quotes, "В записи не найдено явных формулировок о разногласиях."))
+    lines.append("")
+    lines.append("10. Действия по итогам записи")
+    lines.extend(_lines_from_list(actions, "В записи не найдено явных поручений/действий."))
+    lines.append("")
+    lines.append("11. Дополнительные блоки Argus")
+    lines.append(f"- Обзор: {overview if overview else 'Не сформирован'}")
+    lines.append(f"- Экспертный сценарий: {expert_scenario if expert_scenario else 'Не определен'}")
+    lines.append(f"- Уровень совпадения: {expert_match if expert_match else 'Не определен'}")
+    lines.append(f"- Признаки сценария: {', '.join(expert_signs) if expert_signs else 'Не определены'}")
+    lines.append("")
+    lines.append("12. Служебная пометка")
+    lines.append("- Черновик не заменяет официальный документ и подлежит ручной юридической проверке.")
+    lines.append("- Поля без данных в записи должны быть заполнены вручную.")
+
+    text = "\n".join(lines).strip()
+    return {
+        "template": "dtp_notice_837p_draft_v1",
+        "filename": filename,
+        "generated_at": generated_at,
+        "text": text,
+        "fields": {
+            "official_basis": "Приложение 3 к Положению Банка России N 837-П от 01.04.2024",
+            "official_source_url": "https://www.consultant.ru/document/cons_doc_LAW_484131/297c24b4a0634eb29ff81dccaecd27029846c3a1/",
+            "date": date_match.group(0) if date_match else "",
+            "time": time_match.group(0) if time_match else "",
+            "location_quote": location,
+            "witnesses_quote": witnesses,
+            "culprit_name": culprit_name,
+            "culprit_quote": culprit_quote,
+            "victim_name": victim_name,
+            "victim_quote": victim_quote,
+            "vehicles_quotes": vehicles_quotes,
+            "circumstances_quotes": circumstances_quotes,
+            "damage_quotes": damage_quotes,
+            "injury_quotes": injury_quotes,
+            "disagreement_quotes": disagreement_quotes,
+            "actions": actions,
+            "overview": overview,
+            "expert_scenario": expert_scenario,
+            "expert_match_level": expert_match,
+            "expert_signs": expert_signs,
+        },
+    }
+
+
 def _build_scene_document_payload(filename: str) -> dict:
     transcript = _read_optional_text(_transcript_path(filename))
     if not transcript:
@@ -928,6 +1128,15 @@ def _build_scene_document_payload(filename: str) -> dict:
             "expert_signs": expert_signs,
         },
     }
+
+
+def _build_document_payload(filename: str) -> dict:
+    transcript = _read_optional_text(_transcript_path(filename))
+    if not transcript:
+        raise RuntimeError("Транскрипт отсутствует.")
+    if _is_dtp_transcript(transcript):
+        return _build_dtp_document_payload(filename)
+    return _build_scene_document_payload(filename)
 
 
 def _run_expert(filename: str, analysis_mode: str | None = None):
@@ -1387,7 +1596,7 @@ def build_document(filename: str):
         return {"status": "no_transcript"}
 
     try:
-        payload = _build_scene_document_payload(filename)
+        payload = _build_document_payload(filename)
         with open(_document_path(filename), "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
         return {"status": "done", "document": payload}
