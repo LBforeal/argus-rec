@@ -3,7 +3,7 @@
 ## Current snapshot
 - Date: 2026-04-06
 - Branch: `ui-redesign-demo`
-- Latest pushed commit: `3fbe2db` (`origin/ui-redesign-demo`)
+- Latest pushed commit: `1b1154e` (`origin/ui-redesign-demo`)
 - Goal now: stabilize production-ready short release for demo/sales without breaking existing recorder core.
 
 ## Last confirmed context
@@ -68,6 +68,19 @@
   - `ARGUS_CONDITION_ON_PREV_TEXT=1`
   - `ARGUS_VAD_FILTER=1`
   - `YC_STT_BITRATE=64k`
+- Updated document quality and export flow:
+  - improved ДТП parsing for names/date/time:
+    - strict person-name filtering (exclude road/location words)
+    - flexible date/time normalization (`07, 04, 26` -> `07.04.2026`, `2110` -> `21:10`)
+  - added API export endpoint:
+    - `GET /api/document/{filename}/export?format=docx|pdf|txt`
+  - backend now generates downloadable DOCX/PDF files (not only txt)
+  - frontend button now downloads in priority order: DOCX -> PDF -> TXT
+- Updated `requirements.txt`:
+  - added `python-docx`
+  - added `reportlab`
+- Updated `render.yaml`:
+  - set `ARGUS_WHISPER_MODEL=small` for stronger local fallback quality
 
 ## Not changed in this step
 - Backend files except `backend/main.py` not changed.
@@ -87,9 +100,10 @@
 - ДТП field extraction is quote/rule-based and may leave fields empty if they are not present in transcript.
 - If only broken service-account config exists and no API key/IAM token is provided, Yandex path fails and fallback model is used in non-strict mode.
 - Higher quality decode can increase transcription latency slightly.
+- DOCX/PDF export requires successful install of `python-docx` and `reportlab` on deployment.
 
 ## Exact next step
-1. Wait for Render auto-deploy of commit `3fbe2db` (or run Manual Deploy if auto-deploy disabled).
+1. Wait for Render auto-deploy of commit `1b1154e` (or run Manual Deploy if auto-deploy disabled).
 2. In Render env set (recommended):
    - preferred: `YC_SA_KEY_JSON` (full authorized key JSON string) and `YC_FOLDER_ID`
    - optional alternatives: `YC_IAM_TOKEN` or valid `YC_API_KEY`

@@ -462,7 +462,7 @@ async function _generateDocument(filename, button) {
   const baseLabel = 'Сформировать документ';
   button.disabled = true;
   button.textContent = 'Формируем...';
-  _setDocumentStatus('Сбор черновика документа из записи...');
+  _setDocumentStatus('Сбор документа из записи...');
 
   try {
     const res = await fetch(`/api/document/${encodeURIComponent(filename)}`, { method: 'POST' });
@@ -481,20 +481,64 @@ async function _generateDocument(filename, button) {
       return;
     }
 
-    const text = data?.document?.text || '';
-    if (!text.trim()) {
-      _setDocumentStatus('Документ сформирован без содержимого. Проверьте наличие данных в записи.', true);
+    const template = String(data?.document?.template || '');
+    if (!template) {
+      _setDocumentStatus('Документ сформирован без шаблона. Проверьте данные записи.', true);
       return;
     }
 
-    const safeName = String(filename).replace(/[\\/:*?"<>|]+/g, '_');
-    _downloadTextFile(`${safeName}.osmotr.chernovik.txt`, text);
-    _setDocumentStatus('Черновик документа сформирован и скачан.');
+    const downloaded = await _downloadDocumentFromApi(filename, ['docx', 'pdf', 'txt']);
+    if (!downloaded) {
+      _setDocumentStatus('Не удалось скачать документ. Попробуйте снова.', true);
+      return;
+    }
+    _setDocumentStatus(`Документ сформирован и скачан (${downloaded.toUpperCase()}).`);
   } catch (err) {
     _setDocumentStatus(`Не удалось сформировать документ: ${err.message || err}`, true);
   } finally {
     button.disabled = false;
     button.textContent = baseLabel;
+  }
+}
+
+async function _downloadDocumentFromApi(filename, formats) {
+  for (const fmt of formats) {
+    try {
+      const url = `/api/document/${encodeURIComponent(filename)}/export?format=${encodeURIComponent(fmt)}`;
+      const res = await fetch(url);
+      if (!res.ok) continue;
+
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) continue;
+
+      const blobUrl = URL.createObjectURL(blob);
+      const serverName = _extractDownloadFileName(res);
+      const fallbackName = `${String(filename).replace(/[\\/:*?"<>|]+/g, '_')}.argus.document.${fmt}`;
+      const downloadName = serverName || fallbackName;
+
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = downloadName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(blobUrl);
+      return fmt;
+    } catch (_e) {
+      // try next format
+    }
+  }
+  return '';
+}
+
+function _extractDownloadFileName(response) {
+  const contentDisposition = response.headers.get('content-disposition') || '';
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(contentDisposition);
+  if (!match) return '';
+  try {
+    return decodeURIComponent(match[1]).replace(/\"/g, '').trim();
+  } catch (_e) {
+    return match[1].replace(/\"/g, '').trim();
   }
 }
 

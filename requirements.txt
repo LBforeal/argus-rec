@@ -5,3 +5,5 @@ faster-whisper
 openai
 imageio-ffmpeg
 PyJWT[crypto]
+python-docx
+reportlab

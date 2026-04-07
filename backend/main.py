@@ -14,9 +14,10 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import hashlib
+import textwrap
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import numpy as np
@@ -869,6 +870,14 @@ _DTP_MARKERS = re.compile(
 )
 
 _RUS_FULL_NAME_RE = re.compile(r"\b[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2}\b")
+_RUS_FIO_RE = re.compile(r"\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b")
+_DATE_FLEX_RE = re.compile(r"\b(\d{1,2})[.,/\-\s]+(\d{1,2})[.,/\-\s]+(\d{2,4})\b")
+_TIME_FLEX_RE = re.compile(r"\b(?:время\s*)?(\d{1,2})[:.\-\s]?(\d{2})\b", re.IGNORECASE)
+_NON_PERSON_WORDS = {
+    "Москва", "Шоссе", "Улица", "Проспект", "Переулок", "Площадь", "Бульвар",
+    "Варшавская", "Кировоградская", "Ленинградский", "Балтийская", "Дом",
+    "Перекресток", "Перекрёсток", "Трасса", "Дорога",
+}
 
 
 def _is_dtp_transcript(text: str) -> bool:
@@ -878,9 +887,18 @@ def _is_dtp_transcript(text: str) -> bool:
 def _extract_person_names(text: str, limit: int = 8) -> list[str]:
     seen = set()
     result = []
-    for name in _RUS_FULL_NAME_RE.findall(text or ""):
+    candidates = []
+    candidates.extend(_RUS_FIO_RE.findall(text or ""))
+    candidates.extend(_RUS_FULL_NAME_RE.findall(text or ""))
+
+    for name in candidates:
         normalized = re.sub(r"\s+", " ", name).strip()
         if not normalized:
+            continue
+        parts = normalized.split()
+        if len(parts) < 2 or len(parts) > 3:
+            continue
+        if any(part in _NON_PERSON_WORDS for part in parts):
             continue
         low = normalized.lower()
         if low in seen:
@@ -897,10 +915,56 @@ def _extract_role_name(text: str, role_keywords: list[str]) -> tuple[str, str]:
         normalized = sentence.lower()
         if not any(keyword in normalized for keyword in role_keywords):
             continue
+        explicit = re.search(r"\bя[, ]+\s*([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)\b", sentence)
+        if explicit:
+            candidate = re.sub(r"\s+", " ", explicit.group(1)).strip()
+            parts = candidate.split()
+            if len(parts) >= 2 and not any(part in _NON_PERSON_WORDS for part in parts):
+                return candidate, sentence
         names = _extract_person_names(sentence, limit=2)
         if names:
             return names[0], sentence
     return "", ""
+
+
+def _normalize_detected_date(text: str) -> str:
+    direct = re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", text or "")
+    if direct:
+        parts = re.split(r"[./]", direct.group(0))
+        d = int(parts[0])
+        m = int(parts[1])
+        y = int(parts[2])
+        if y < 100:
+            y += 2000
+        if 1 <= d <= 31 and 1 <= m <= 12:
+            return f"{d:02d}.{m:02d}.{y:04d}"
+
+    for match in _DATE_FLEX_RE.finditer(text or ""):
+        d = int(match.group(1))
+        m = int(match.group(2))
+        y = int(match.group(3))
+        if y < 100:
+            y += 2000
+        if 1 <= d <= 31 and 1 <= m <= 12 and 2000 <= y <= 2099:
+            return f"{d:02d}.{m:02d}.{y:04d}"
+    return ""
+
+
+def _normalize_detected_time(text: str) -> str:
+    direct = re.search(r"\b\d{1,2}:\d{2}\b", text or "")
+    if direct:
+        h, mm = direct.group(0).split(":")
+        h_i = int(h)
+        m_i = int(mm)
+        if 0 <= h_i <= 23 and 0 <= m_i <= 59:
+            return f"{h_i:02d}:{m_i:02d}"
+
+    for match in _TIME_FLEX_RE.finditer(text or ""):
+        h_i = int(match.group(1))
+        m_i = int(match.group(2))
+        if 0 <= h_i <= 23 and 0 <= m_i <= 59:
+            return f"{h_i:02d}:{m_i:02d}"
+    return ""
 
 
 def _build_dtp_document_payload(filename: str) -> dict:
@@ -912,8 +976,8 @@ def _build_dtp_document_payload(filename: str) -> dict:
     actions_items = _read_optional_json(_actions_path(filename), [])
     expert_report = _read_optional_json(_expert_path(filename), {})
 
-    date_match = re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", transcript)
-    time_match = re.search(r"\b\d{1,2}:\d{2}\b", transcript)
+    normalized_date = _normalize_detected_date(transcript)
+    normalized_time = _normalize_detected_time(transcript)
 
     location = _find_first_sentence(
         transcript,
@@ -993,8 +1057,8 @@ def _build_dtp_document_payload(filename: str) -> dict:
         f"- {location if location else 'Не указано в записи'}",
         "",
         "2. Дата и время ДТП",
-        f"- Дата: {date_match.group(0) if date_match else 'Не указано в записи'}",
-        f"- Время: {time_match.group(0) if time_match else 'Не указано в записи'}",
+        f"- Дата: {normalized_date if normalized_date else 'Не указано в записи'}",
+        f"- Время: {normalized_time if normalized_time else 'Не указано в записи'}",
         "",
         "3. Свидетели ДТП",
         f"- {witnesses if witnesses else 'Не указано в записи'}",
@@ -1041,8 +1105,8 @@ def _build_dtp_document_payload(filename: str) -> dict:
         "fields": {
             "official_basis": "Приложение 3 к Положению Банка России N 837-П от 01.04.2024",
             "official_source_url": "https://www.cbr.ru/Queries/XsltBlock/File/87500/-1/2506",
-            "date": date_match.group(0) if date_match else "",
-            "time": time_match.group(0) if time_match else "",
+            "date": normalized_date,
+            "time": normalized_time,
             "location_quote": location,
             "witnesses_quote": witnesses,
             "culprit_name": culprit_name,
@@ -1178,6 +1242,126 @@ def _build_document_payload(filename: str) -> dict:
     if _is_dtp_transcript(transcript):
         return _build_dtp_document_payload(filename)
     return _build_scene_document_payload(filename)
+
+
+def _safe_stem(value: str) -> str:
+    stem = re.sub(r"[\\/:*?\"<>|]+", "_", value or "document").strip(" ._")
+    return stem or "document"
+
+
+def _document_text_from_payload(payload: dict) -> str:
+    text = str(payload.get("text") or "").strip()
+    if text:
+        return text
+    template = str(payload.get("template") or "").strip() or "document"
+    generated_at = str(payload.get("generated_at") or "").strip()
+    lines = [
+        f"Document template: {template}",
+        f"Generated at: {generated_at}" if generated_at else "Generated at: unknown",
+        "",
+        "No text content found in payload.",
+    ]
+    return "\n".join(lines)
+
+
+def _export_document_docx(payload: dict) -> str:
+    try:
+        from docx import Document
+    except Exception as e:
+        raise RuntimeError("Для экспорта DOCX требуется пакет python-docx.") from e
+
+    text = _document_text_from_payload(payload)
+    title = "Argus REC - Document Draft"
+
+    doc = Document()
+    doc.add_heading(title, level=1)
+    template = str(payload.get("template") or "").strip()
+    if template:
+        doc.add_paragraph(f"Template: {template}")
+    generated_at = str(payload.get("generated_at") or "").strip()
+    if generated_at:
+        doc.add_paragraph(f"Generated: {generated_at}")
+    doc.add_paragraph("")
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            doc.add_paragraph("")
+            continue
+        if re.match(r"^\d+\.\s+", stripped):
+            doc.add_heading(stripped, level=2)
+            continue
+        if stripped.startswith("- "):
+            doc.add_paragraph(stripped[2:], style="List Bullet")
+            continue
+        doc.add_paragraph(stripped)
+
+    tmp = tempfile.NamedTemporaryFile(prefix="argus_doc_", suffix=".docx", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    doc.save(tmp_path)
+    return tmp_path
+
+
+def _export_document_pdf(payload: dict) -> str:
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+    except Exception as e:
+        raise RuntimeError("Для экспорта PDF требуется пакет reportlab.") from e
+
+    text = _document_text_from_payload(payload)
+    tmp = tempfile.NamedTemporaryFile(prefix="argus_doc_", suffix=".pdf", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    c = canvas.Canvas(tmp_path, pagesize=A4)
+    width, height = A4
+    margin = 40
+    y = height - margin
+    line_height = 14
+    max_chars = 105
+
+    header = "Argus REC - Document Draft"
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(margin, y, header)
+    y -= line_height * 1.5
+    c.setFont("Helvetica", 10)
+
+    template = str(payload.get("template") or "").strip()
+    generated_at = str(payload.get("generated_at") or "").strip()
+    meta_lines = []
+    if template:
+        meta_lines.append(f"Template: {template}")
+    if generated_at:
+        meta_lines.append(f"Generated: {generated_at}")
+    for meta in meta_lines:
+        c.drawString(margin, y, meta)
+        y -= line_height
+    if meta_lines:
+        y -= line_height * 0.7
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        wrapped = textwrap.wrap(line, width=max_chars) if line else [""]
+        for chunk in wrapped:
+            if y <= margin:
+                c.showPage()
+                c.setFont("Helvetica", 10)
+                y = height - margin
+            c.drawString(margin, y, chunk)
+            y -= line_height
+
+    c.save()
+    return tmp_path
+
+
+def _safe_remove_file(path: str) -> None:
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
 
 
 def _run_expert(filename: str, analysis_mode: str | None = None):
@@ -1669,6 +1853,64 @@ def get_document(filename: str):
             "status": "error",
             "error": "Не удалось прочитать сохранённый черновик документа. Сформируйте заново.",
         }
+
+
+@app.get("/api/document/{filename}/export")
+def export_document(
+    filename: str,
+    background_tasks: BackgroundTasks,
+    format: str = Query(default="docx"),
+):
+    filename = os.path.basename(filename)
+    audio_path = os.path.join(RECORDINGS_DIR, filename)
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    dpath = _document_path(filename)
+    if not os.path.isfile(dpath):
+        raise HTTPException(status_code=404, detail="Черновик документа не найден. Сначала сформируйте документ.")
+
+    try:
+        with open(dpath, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать черновик документа: {e}") from e
+
+    fmt = (format or "docx").strip().lower()
+    safe_base = _safe_stem(filename)
+
+    if fmt == "docx":
+        tmp_path = _export_document_docx(payload)
+        background_tasks.add_task(_safe_remove_file, tmp_path)
+        return FileResponse(
+            tmp_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=f"{safe_base}.argus.document.docx",
+        )
+
+    if fmt == "pdf":
+        tmp_path = _export_document_pdf(payload)
+        background_tasks.add_task(_safe_remove_file, tmp_path)
+        return FileResponse(
+            tmp_path,
+            media_type="application/pdf",
+            filename=f"{safe_base}.argus.document.pdf",
+        )
+
+    if fmt == "txt":
+        text = _document_text_from_payload(payload)
+        tmp = tempfile.NamedTemporaryFile(prefix="argus_doc_", suffix=".txt", delete=False, mode="w", encoding="utf-8")
+        tmp.write(text)
+        tmp_path = tmp.name
+        tmp.close()
+        background_tasks.add_task(_safe_remove_file, tmp_path)
+        return FileResponse(
+            tmp_path,
+            media_type="text/plain; charset=utf-8",
+            filename=f"{safe_base}.argus.document.txt",
+        )
+
+    raise HTTPException(status_code=400, detail="Неподдерживаемый формат. Используйте: docx, pdf, txt.")
 
 
 # Static files must be mounted last
