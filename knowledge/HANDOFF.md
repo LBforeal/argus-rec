@@ -3,7 +3,7 @@
 ## Current snapshot
 - Date: 2026-04-06
 - Branch: `ui-redesign-demo`
-- Latest pushed commit: `1b1154e` (`origin/ui-redesign-demo`)
+- Latest pushed commit: `94fd669` (`origin/ui-redesign-demo`)
 - Goal now: stabilize production-ready short release for demo/sales without breaking existing recorder core.
 
 ## Last confirmed context
@@ -81,6 +81,8 @@
   - added `reportlab`
 - Updated `render.yaml`:
   - set `ARGUS_WHISPER_MODEL=small` for stronger local fallback quality
+- Locked product requirement:
+  - document templates must be strictly official RF forms with explicit legal basis and official source URL.
 
 ## Not changed in this step
 - Backend files except `backend/main.py` not changed.
@@ -103,7 +105,7 @@
 - DOCX/PDF export requires successful install of `python-docx` and `reportlab` on deployment.
 
 ## Exact next step
-1. Wait for Render auto-deploy of commit `1b1154e` (or run Manual Deploy if auto-deploy disabled).
+1. Wait for Render auto-deploy of commit `94fd669` (or run Manual Deploy if auto-deploy disabled).
 2. In Render env set (recommended):
    - preferred: `YC_SA_KEY_JSON` (full authorized key JSON string) and `YC_FOLDER_ID`
    - optional alternatives: `YC_IAM_TOKEN` or valid `YC_API_KEY`

@@ -15,6 +15,10 @@ This is not a casual notes app. Main focus is professional use (legal, security,
 - No fake transcript/summary/actions/expert output.
 - Any AI result must come only from real processed audio.
 - If audio is not processed yet, show empty/no-data state.
+- Document templates must be strictly official (RF), with official formatting basis.
+- Each template must store legal basis metadata:
+  - normative act name/number/date
+  - official source URL
 - Main screen: record button, upload button, file list.
 - Detail screen: exactly 4 tabs:
   - Overview
@@ -33,6 +37,7 @@ This is not a casual notes app. Main focus is professional use (legal, security,
 - STT quality target for Russian speech is Yandex SpeechKit.
 - Priority is reliable real transcription pipeline (no emulation).
 - If STT auth fails, fix auth/permissions path, not UI cosmetics.
+- Priority for docs: only official RF forms/templates first, then domain-specific drafts.
 
 ## 5. Known context from previous long chat
 - Repeated issue track: Yandex STT `401 PermissionDenied`.
