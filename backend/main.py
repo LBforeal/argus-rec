@@ -999,7 +999,7 @@ def _build_dtp_document_payload(filename: str) -> dict:
         "text": text,
         "fields": {
             "official_basis": "Приложение 3 к Положению Банка России N 837-П от 01.04.2024",
-            "official_source_url": "https://www.consultant.ru/document/cons_doc_LAW_484131/297c24b4a0634eb29ff81dccaecd27029846c3a1/",
+            "official_source_url": "https://www.cbr.ru/Queries/XsltBlock/File/87500/-1/2506",
             "date": date_match.group(0) if date_match else "",
             "time": time_match.group(0) if time_match else "",
             "location_quote": location,

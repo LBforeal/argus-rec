@@ -47,6 +47,7 @@
   - new template: `dtp_notice_837p_draft_v1`
   - official basis stored in payload fields:
     - `official_basis`: Приложение 3 к Положению Банка России N 837-П
+    - `official_source_url`: официальный Вестник Банка России с текстом формы
   - `/api/document/{filename}` now uses `_build_document_payload`:
     - ДТП transcript -> ДТП template
     - otherwise -> existing scene template
