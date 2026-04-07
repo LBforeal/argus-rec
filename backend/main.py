@@ -133,8 +133,13 @@ def _transcribe_audio_with_light_backend(audio_data):
         ) from e
 
 
+def _has_yc_service_account_key_config() -> bool:
+    return bool((os.getenv("YC_SA_KEY_JSON") or "").strip() or (os.getenv("YC_SA_KEY_FILE") or "").strip())
+
+
 def _is_yandex_stt_configured() -> bool:
-    return bool(_get_yc_iam_token() or _get_yc_service_account_key_data() or _get_yc_api_key())
+    # Presence-only check; avoid parsing errors at this stage.
+    return bool(_get_yc_iam_token() or _has_yc_service_account_key_config() or _get_yc_api_key())
 
 
 def _is_yandex_stt_strict() -> bool:
@@ -349,14 +354,19 @@ def _get_yandex_auth_header() -> tuple[str, str, str, int]:
             len(iam_token),
         )
 
-    sa_iam_token = _get_or_refresh_yc_iam_token_from_service_account()
-    if sa_iam_token:
-        return (
-            f"Bearer {sa_iam_token}",
-            "sa_iam_token",
-            _yc_secret_fingerprint(sa_iam_token),
-            len(sa_iam_token),
-        )
+    if _has_yc_service_account_key_config():
+        try:
+            sa_iam_token = _get_or_refresh_yc_iam_token_from_service_account()
+            if sa_iam_token:
+                return (
+                    f"Bearer {sa_iam_token}",
+                    "sa_iam_token",
+                    _yc_secret_fingerprint(sa_iam_token),
+                    len(sa_iam_token),
+                )
+        except Exception as e:
+            # Keep service alive: continue to API key fallback path.
+            print(f"[Yandex STT auth warning] service-account auth unavailable: {e}", flush=True)
 
     api_key = _get_yc_api_key()
     if api_key:
