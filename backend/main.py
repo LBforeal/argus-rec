@@ -8,8 +8,10 @@ import wave
 import subprocess
 import gc
 import json
+import unicodedata
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -225,6 +227,48 @@ def _load_wav_for_whisper(path: str, target_sr: int = 16000):
 
 def _transcript_path(filename: str) -> str:
     return os.path.join(RECORDINGS_DIR, filename + TRANSCRIPT_SUFFIX)
+
+
+def _normalize_filename(value: str) -> str:
+    return unicodedata.normalize("NFC", (value or "").strip())
+
+
+def _resolve_existing_filename(filename: str) -> str | None:
+    raw = filename or ""
+    candidates: list[str] = []
+
+    def _add_candidate(value: str):
+        value = _normalize_filename(os.path.basename(value))
+        if value and value not in candidates:
+            candidates.append(value)
+
+    _add_candidate(raw)
+    _add_candidate(unquote(raw))
+    _add_candidate(raw.replace("+", " "))
+    _add_candidate(unquote(raw).replace("+", " "))
+
+    normalized_index: dict[str, str] = {}
+    try:
+        for entry in os.listdir(RECORDINGS_DIR):
+            normalized_index[_normalize_filename(entry)] = entry
+    except OSError:
+        return None
+
+    for candidate in candidates:
+        actual = normalized_index.get(candidate)
+        if not actual:
+            continue
+        actual_path = os.path.join(RECORDINGS_DIR, actual)
+        if os.path.isfile(actual_path):
+            return actual
+    return None
+
+
+def _resolve_recording_or_404(filename: str) -> tuple[str, str]:
+    actual = _resolve_existing_filename(filename)
+    if not actual:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return actual, os.path.join(RECORDINGS_DIR, actual)
 
 
 _overview_jobs: dict = {}
@@ -618,7 +662,7 @@ def _run_transcription(filename: str):
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)):
-    name = os.path.basename(file.filename or "")
+    name = _normalize_filename(os.path.basename(file.filename or ""))
     if not name:
         raise HTTPException(status_code=400, detail="Имя файла не указано")
 
@@ -658,22 +702,17 @@ def list_recordings():
 
 @app.get("/api/recordings/{filename}")
 def get_recording(filename: str):
-    filename = os.path.basename(filename)
-    fpath = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(fpath):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    _filename, fpath = _resolve_recording_or_404(filename)
     return FileResponse(fpath)
 
 
 @app.delete("/api/recordings/{filename}")
 def delete_recording(filename: str):
-    filename = os.path.basename(filename)
+    filename = _normalize_filename(os.path.basename(filename))
     if not filename:
         raise HTTPException(status_code=400, detail="Имя файла не указано")
 
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, audio_path = _resolve_recording_or_404(filename)
 
     with _jobs_lock:
         if _jobs.get(filename, {}).get("status") == "running":
@@ -718,10 +757,7 @@ def delete_recording(filename: str):
 
 @app.post("/api/transcribe/{filename}")
 def start_transcription(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     with _jobs_lock:
         if _jobs.get(filename, {}).get("status") == "running":
@@ -734,10 +770,7 @@ def start_transcription(filename: str):
 
 @app.get("/api/transcript/{filename}")
 def get_transcript(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     with _jobs_lock:
         job = _jobs.get(filename)
@@ -747,9 +780,12 @@ def get_transcript(filename: str):
     # Check disk for a saved transcript (survives server restart)
     tpath = _transcript_path(filename)
     if os.path.isfile(tpath):
-        with open(tpath, "r", encoding="utf-8") as f:
-            text = f.read()
-        return {"status": "done", "text": text}
+        try:
+            with open(tpath, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            return {"status": "done", "text": text}
+        except OSError:
+            return {"status": "error", "error": "Не удалось прочитать сохранённый транскрипт. Перезапустите расшифровку."}
 
     return {"status": "idle"}
 
@@ -758,10 +794,7 @@ def get_transcript(filename: str):
 
 @app.post("/api/overview/{filename}")
 def start_overview(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -778,10 +811,7 @@ def start_overview(filename: str):
 
 @app.get("/api/overview/{filename}")
 def get_overview(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -805,10 +835,7 @@ def get_overview(filename: str):
 
 @app.post("/api/actions/{filename}")
 def start_actions(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -826,10 +853,7 @@ def start_actions(filename: str):
 @app.get("/api/actions/{filename}")
 def get_actions(filename: str):
     import json
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -856,10 +880,7 @@ def get_actions(filename: str):
 
 @app.post("/api/expert/{filename}")
 def start_expert(filename: str, analysis_mode: str | None = None):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -877,10 +898,7 @@ def start_expert(filename: str, analysis_mode: str | None = None):
 @app.get("/api/expert/{filename}")
 def get_expert(filename: str):
     import json
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -905,10 +923,7 @@ def get_expert(filename: str):
 
 @app.post("/api/document/{filename}")
 def build_document(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):
@@ -925,10 +940,7 @@ def build_document(filename: str):
 
 @app.get("/api/document/{filename}")
 def get_document(filename: str):
-    filename = os.path.basename(filename)
-    audio_path = os.path.join(RECORDINGS_DIR, filename)
-    if not os.path.isfile(audio_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    filename, _audio_path = _resolve_recording_or_404(filename)
 
     tpath = _transcript_path(filename)
     if not os.path.isfile(tpath):

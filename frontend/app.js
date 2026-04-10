@@ -344,7 +344,8 @@ async function _deleteRecording(filename) {
 
 function initDetail() {
   const params = new URLSearchParams(window.location.search);
-  const filename = params.get('file');
+  const rawFilename = params.get('file');
+  const filename = _decodeFilenameFromAttr(rawFilename) || (rawFilename || '').trim();
 
   if (!filename) {
     document.getElementById('file-title').textContent = 'Файл не найден';
@@ -516,10 +517,14 @@ async function _loadTranscriptState(filename) {
   const container = document.getElementById('transcript-state');
   try {
     const res = await fetch(`/api/transcript/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error('Ошибка сервера');
+    if (!res.ok) {
+      const message = await _extractApiError(res, `Ошибка сервера (HTTP ${res.status})`);
+      throw new Error(message);
+    }
     const data = await res.json();
     _renderTranscriptState(data, filename, container);
   } catch (e) {
+    _clearTranscriptPoll();
     container.innerHTML = `<div class="empty-state error-text">Не удалось получить статус транскрипта: ${escapeHtml(e.message || e)}</div>`;
   }
 }
@@ -569,7 +574,10 @@ async function _startTranscription(filename) {
 
   try {
     const res = await fetch(`/api/transcribe/${encodeURIComponent(filename)}`, { method: 'POST' });
-    if (!res.ok) throw new Error('Ошибка запуска');
+    if (!res.ok) {
+      const message = await _extractApiError(res, `Ошибка запуска (HTTP ${res.status})`);
+      throw new Error(message);
+    }
     _transcriptPoll = setInterval(() => _loadTranscriptState(filename), 3000);
   } catch (err) {
     container.innerHTML = `
