@@ -518,7 +518,7 @@ async function _loadTranscriptState(filename) {
   try {
     const res = await fetch(`/api/transcript/${encodeURIComponent(filename)}`);
     if (!res.ok) {
-      const message = await _extractApiError(res, `Ошибка сервера (HTTP ${res.status})`);
+      const message = await _extractApiError(res, 'Ошибка сервера');
       throw new Error(message);
     }
     const data = await res.json();
@@ -575,7 +575,7 @@ async function _startTranscription(filename) {
   try {
     const res = await fetch(`/api/transcribe/${encodeURIComponent(filename)}`, { method: 'POST' });
     if (!res.ok) {
-      const message = await _extractApiError(res, `Ошибка запуска (HTTP ${res.status})`);
+      const message = await _extractApiError(res, 'Ошибка запуска');
       throw new Error(message);
     }
     _transcriptPoll = setInterval(() => _loadTranscriptState(filename), 3000);
