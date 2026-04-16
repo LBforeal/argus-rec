@@ -29,3 +29,23 @@
   1. Deploy updated `render-stable-freeze` branch on Render.
   2. Hard-refresh detail page (`Ctrl+F5`) to load new JS.
   3. Upload one file with Cyrillic + spaces and verify transcript tab no longer shows generic server status error.
+
+## Update 2026-04-16 (hotfix: remove duplicated HTTP code text in transcript error)
+
+- Date: 2026-04-16
+- Task: eliminate duplicated `(HTTP 502)` text and keep transcript error UX clear.
+- Changed:
+  - `frontend/app.js`
+    - in transcript tab error handling, changed `_extractApiError` fallback text to plain messages:
+      - `Ошибка сервера`
+      - `Ошибка запуска`
+    - this prevents duplicate message form like `(HTTP 502) (HTTP 502)`.
+- Not changed:
+  - backend logic unchanged.
+  - no endpoint contracts changed.
+- Risks:
+  - still depends on Render instance availability; true upstream 502 can still occur on free-tier limits.
+- Exact next step:
+  1. Redeploy branch `render-stable-freeze` on Render.
+  2. Hard refresh browser (`Ctrl+F5`).
+  3. Re-test transcript start on one new uploaded file.
