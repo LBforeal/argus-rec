@@ -10,6 +10,9 @@ import gc
 import json
 import time
 import unicodedata
+import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
@@ -62,6 +65,10 @@ TRANSCRIBE_WORKERS = _env_int("ARGUS_TRANSCRIBE_WORKERS", 1, 1, 4)
 ANALYSIS_WORKERS = _env_int("ARGUS_ANALYSIS_WORKERS", 1, 1, 4)
 TRANSCRIBE_JOB_TIMEOUT_SEC = _env_int("ARGUS_TRANSCRIBE_JOB_TIMEOUT_SEC", 1800, 60, 24 * 3600)
 ANALYSIS_JOB_TIMEOUT_SEC = _env_int("ARGUS_ANALYSIS_JOB_TIMEOUT_SEC", 600, 30, 24 * 3600)
+STT_PROVIDER = (os.getenv("ARGUS_STT_PROVIDER") or "yandex_sync").strip().lower()
+YANDEX_STT_TIMEOUT_SEC = _env_int("ARGUS_YANDEX_TIMEOUT_SEC", 60, 5, 300)
+YANDEX_STT_RETRIES = _env_int("ARGUS_YANDEX_RETRIES", 2, 0, 5)
+YANDEX_STT_CHUNK_SECONDS = _env_int("ARGUS_YANDEX_CHUNK_SECONDS", 25, 5, 30)
 TRANSCRIBE_TIMEOUT_ERROR = "Расшифровка заняла слишком много времени. Перезапустите расшифровку."
 OVERVIEW_TIMEOUT_ERROR = "Построение обзора заняло слишком много времени. Запустите обзор заново."
 ACTIONS_TIMEOUT_ERROR = "Построение действий заняло слишком много времени. Запустите действия заново."
@@ -288,6 +295,126 @@ def _probe_audio_duration_seconds(path: str, extension: str) -> float | None:
         return _parse_duration_from_ffmpeg_output(probe.stderr or "")
     except Exception:
         return None
+
+
+def _load_audio_pcm16_bytes(path: str, extension: str, target_sr: int = 16000) -> bytes:
+    ffmpeg_executable = _resolve_ffmpeg_executable()
+    if ffmpeg_executable:
+        cmd = [
+            ffmpeg_executable,
+            "-nostdin",
+            "-threads",
+            "0",
+            "-i",
+            path,
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            str(target_sr),
+            "-",
+        ]
+        try:
+            out = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=True,
+                timeout=60,
+            ).stdout
+            if out:
+                return out
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg не смог подготовить аудио: {stderr[:240] or 'неизвестная ошибка'}") from e
+
+    if extension != ".wav":
+        raise RuntimeError("Для выбранного STT требуется ffmpeg для подготовки аудио.")
+
+    wav_audio = _load_wav_for_whisper(path, target_sr=target_sr)
+    if wav_audio.size == 0:
+        return b""
+    pcm = (np.clip(wav_audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+    return pcm.tobytes()
+
+
+def _get_yandex_stt_credentials() -> tuple[str, str]:
+    api_key = (os.getenv("YC_API_KEY") or os.getenv("YANDEX_API_KEY") or "").strip()
+    folder_id = (os.getenv("YC_FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID") or "").strip()
+    if not api_key:
+        raise RuntimeError("YC_API_KEY не задан. Укажите API key сервисного аккаунта Yandex Cloud.")
+    if not folder_id:
+        raise RuntimeError("YC_FOLDER_ID не задан. Укажите Folder ID для SpeechKit.")
+    return api_key, folder_id
+
+
+def _yandex_recognize_chunk_lpcm(chunk: bytes, api_key: str, folder_id: str, lang: str = "ru-RU") -> str:
+    params = {
+        "folderId": folder_id,
+        "lang": lang,
+        "format": "lpcm",
+        "sampleRateHertz": "16000",
+    }
+    url = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?" + urllib.parse.urlencode(params)
+
+    last_error: Exception | None = None
+    for attempt in range(YANDEX_STT_RETRIES + 1):
+        request = urllib.request.Request(
+            url=url,
+            data=chunk,
+            method="POST",
+            headers={
+                "Authorization": f"Api-Key {api_key}",
+                "Content-Type": "application/octet-stream",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=YANDEX_STT_TIMEOUT_SEC) as response:
+                body = response.read()
+            payload = json.loads(body.decode("utf-8", errors="replace"))
+            result = str(payload.get("result") or "").strip()
+            error_code = str(payload.get("error_code") or "").strip()
+            error_message = str(payload.get("error_message") or "").strip()
+            if error_code or error_message:
+                raise RuntimeError(f"SpeechKit: {error_code or 'error'} {error_message}".strip())
+            return result
+        except urllib.error.HTTPError as e:
+            err_body = b""
+            try:
+                err_body = e.read()
+            except Exception:
+                pass
+            text = err_body.decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"SpeechKit HTTP {e.code}: {text[:240]}")
+        except Exception as e:
+            last_error = e
+
+        if attempt < YANDEX_STT_RETRIES:
+            time.sleep(0.7 * (attempt + 1))
+
+    raise RuntimeError(f"Ошибка запроса к SpeechKit: {last_error}") from last_error
+
+
+def _transcribe_audio_with_yandex_sync(audio_path: str, extension: str) -> str:
+    api_key, folder_id = _get_yandex_stt_credentials()
+    pcm_bytes = _load_audio_pcm16_bytes(audio_path, extension, target_sr=16000)
+    if not pcm_bytes:
+        return ""
+
+    bytes_per_second = 16000 * 2  # mono, int16
+    chunk_size = YANDEX_STT_CHUNK_SECONDS * bytes_per_second
+    parts = [pcm_bytes[i:i + chunk_size] for i in range(0, len(pcm_bytes), chunk_size)]
+
+    texts = []
+    for chunk in parts:
+        if not chunk:
+            continue
+        piece = _yandex_recognize_chunk_lpcm(chunk, api_key=api_key, folder_id=folder_id)
+        if piece:
+            texts.append(piece)
+    return " ".join(texts).strip()
 
 
 def _save_upload_with_limit(upload: UploadFile, destination_path: str) -> int:
@@ -713,19 +840,27 @@ def _run_transcription(filename: str):
 
         # ── STEP 5: transcribe from temp ─────────────────────────
         diag["step"] = "transcribe"
+        diag["stt_provider"] = STT_PROVIDER
         ffmpeg_executable = _resolve_ffmpeg_executable()
         diag["ffmpeg_executable"] = ffmpeg_executable or "none"
-        if ffmpeg_executable:
-            audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
+        if STT_PROVIDER == "yandex_sync":
+            text = _transcribe_audio_with_yandex_sync(tmp_path, ext)
+        elif STT_PROVIDER == "whisper_local":
+            if ffmpeg_executable:
+                audio_data = _load_audio_with_ffmpeg(tmp_path, ffmpeg_executable)
+            else:
+                if ext != ".wav":
+                    raise RuntimeError(
+                        "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
+                    )
+                wav_audio = _load_wav_for_whisper(tmp_path)
+                audio_data = wav_audio
+            diag["step"] = "init_backend"
+            text = _transcribe_audio_with_light_backend(audio_data)
         else:
-            if ext != ".wav":
-                raise RuntimeError(
-                    "Для этого формата нужен ffmpeg. Установите ffmpeg в систему или imageio-ffmpeg."
-                )
-            wav_audio = _load_wav_for_whisper(tmp_path)
-            audio_data = wav_audio
-        diag["step"] = "init_backend"
-        text = _transcribe_audio_with_light_backend(audio_data)
+            raise RuntimeError(
+                f"Неизвестный STT провайдер '{STT_PROVIDER}'. Используйте yandex_sync или whisper_local."
+            )
 
         # ── STEP 5: write transcript ─────────────────────────────
         diag["step"] = "write_transcript"
@@ -1108,9 +1243,16 @@ def readyz():
         except Exception as e:
             errors.append(f"Recordings dir is not writable: {e}")
 
+    if STT_PROVIDER == "yandex_sync":
+        if not (os.getenv("YC_API_KEY") or os.getenv("YANDEX_API_KEY")):
+            errors.append("YC_API_KEY is missing for yandex_sync provider")
+        if not (os.getenv("YC_FOLDER_ID") or os.getenv("YANDEX_FOLDER_ID")):
+            errors.append("YC_FOLDER_ID is missing for yandex_sync provider")
+
     payload = {
         "status": "ready" if not errors else "degraded",
         "recordings_dir": RECORDINGS_DIR,
+        "stt_provider": STT_PROVIDER,
         "ffmpeg_available": bool(_resolve_ffmpeg_executable()),
         "errors": errors,
     }

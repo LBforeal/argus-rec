@@ -113,3 +113,38 @@
   1. Deploy branch `render-stable-freeze` with new Stage 1 guards.
   2. Move Render service to paid always-on plan (to remove free-tier stop/start and quota instability).
   3. Start Stage 2: provider-adapter layer for production STT (Yandex + fallback) and GPT report generation under feature flags.
+
+## Update 2026-04-16 (stage 2 start: yandex stt provider in backend)
+
+- Date: 2026-04-16
+- Task: switch transcription runtime to Yandex STT as primary provider, without frontend changes.
+- Changed:
+  - `backend/main.py`:
+    - added `ARGUS_STT_PROVIDER` (default: `yandex_sync`).
+    - added Yandex STT env knobs:
+      - `ARGUS_YANDEX_TIMEOUT_SEC`
+      - `ARGUS_YANDEX_RETRIES`
+      - `ARGUS_YANDEX_CHUNK_SECONDS`
+    - added Yandex sync STT pipeline:
+      - audio conversion to mono PCM16 16kHz
+      - chunked recognition for long audio
+      - HTTP calls to SpeechKit `speech/v1/stt:recognize`
+      - robust API/network error surfacing
+    - transcription runner now routes by provider:
+      - `yandex_sync` (primary)
+      - `whisper_local` (explicit fallback only)
+    - `/readyz` now validates Yandex credentials when `yandex_sync` is selected and returns `stt_provider` in payload.
+  - verification:
+    - `python -m compileall backend/main.py backend/ai_module.py` -> OK
+    - `python -c "import backend.main, backend.ai_module"` -> OK
+    - local TestClient smoke with mocked Yandex recognizer path -> OK
+- Not changed:
+  - frontend files unchanged.
+  - tabs/ux flow unchanged.
+  - GPT logic unchanged.
+- Risks:
+  - real Yandex recognition requires valid `YC_API_KEY` and `YC_FOLDER_ID` in Render env.
+  - if SpeechKit rejects request (roles/scope/billing), transcript returns clear backend error text.
+- Exact next step:
+  1. Set Render env for Yandex credentials (`YC_API_KEY`, `YC_FOLDER_ID`) and `ARGUS_STT_PROVIDER=yandex_sync`.
+  2. Redeploy and run live e2e check on one real investor-style recording.
