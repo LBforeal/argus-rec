@@ -49,3 +49,67 @@
   1. Redeploy branch `render-stable-freeze` on Render.
   2. Hard refresh browser (`Ctrl+F5`).
   3. Re-test transcript start on one new uploaded file.
+
+## Update 2026-04-16 (pre-paid-cutover audit snapshot)
+
+- Date: 2026-04-16
+- Task: full readiness audit for paid hosting cutover + STT/GPT integration planning.
+- Changed:
+  - No functional code changes.
+  - Performed checks:
+    - `python -m compileall backend/main.py backend/ai_module.py` -> OK
+    - `python -c "import backend.main, backend.ai_module"` -> OK
+    - API smoke via FastAPI TestClient for upload/transcript/overview/actions/expert/document/delete -> all 200 in local test path.
+  - Collected architectural findings for cutover:
+    - service currently uses single-worker executor (`ThreadPoolExecutor(max_workers=1)`) -> throughput bottleneck under concurrent jobs.
+    - upload endpoint has extension check only; no explicit size limit/quotas.
+    - document export in stable branch is text draft (`.txt`) only, not docx/pdf in this branch.
+    - expert module remains rule-based demo engine (no external LLM yet).
+    - render blueprint still configured as free plan.
+- Not changed:
+  - Backend logic, frontend UX structure, API contracts unchanged.
+- Risks:
+  - Free-plan infra instability persists until paid cutover.
+  - Without explicit upload limits, paid instance can be exhausted by large files.
+  - Single worker can create long queue delays during investor demo if multiple operations are triggered.
+- Exact next step:
+  1. Switch Render to paid always-on instance and keep branch `render-stable-freeze`.
+  2. Add operational env policy (size/time limits, timeout, logging) before enabling external STT/GPT providers.
+  3. Integrate STT/GPT behind feature flags with fallback path preserved.
+
+## Update 2026-04-16 (stage 1 hardening for stable hosting)
+
+- Date: 2026-04-16
+- Task: complete Stage 1 backend hardening before paid cutover.
+- Changed:
+  - `backend/main.py`:
+    - added bounded env parsing for operational limits and worker config.
+    - added upload-size guard (`ARGUS_MAX_UPLOAD_MB`) with clear `413` response and partial-file cleanup.
+    - added audio-duration guard (`ARGUS_MAX_AUDIO_SECONDS`) before transcription start.
+    - split background execution pools:
+      - `_transcribe_executor` for transcription queue
+      - `_analysis_executor` for overview/actions/expert queue
+    - added running-job timeout guards for all async job types:
+      - transcription (`ARGUS_TRANSCRIBE_JOB_TIMEOUT_SEC`)
+      - overview/actions/expert (`ARGUS_ANALYSIS_JOB_TIMEOUT_SEC`)
+    - added infra endpoints:
+      - `/healthz` (basic liveness)
+      - `/readyz` (recordings dir writable check + ffmpeg availability snapshot)
+  - `render.yaml`:
+    - health check switched to `/healthz`.
+    - added env vars for limits/workers/timeouts with safe defaults.
+  - verification:
+    - `python -m compileall backend/main.py backend/ai_module.py` -> OK
+    - `python -c "import backend.main, backend.ai_module"` -> OK
+    - FastAPI TestClient smoke (upload/transcript/overview/actions/expert/document/delete + health/readiness + upload limit path) -> OK.
+- Not changed:
+  - frontend structure and 4-tab detail UX unchanged.
+  - AI provider integration (Yandex/GPT) not added in this step.
+  - official docx/pdf generator not added in this step.
+- Risks:
+  - free Render outages/traffic caps can still cause upstream 5xx regardless of code quality.
+  - duration probing for non-wav relies on ffmpeg metadata output; if host ffmpeg behaves non-standard, only upload-size limits stay guaranteed.
+- Exact next step:
+  1. Deploy branch `render-stable-freeze` with new Stage 1 guards.
+  2. Move Render service to paid always-on plan (to remove free-tier stop/start and quota instability).
+  3. Start Stage 2: provider-adapter layer for production STT (Yandex + fallback) and GPT report generation under feature flags.

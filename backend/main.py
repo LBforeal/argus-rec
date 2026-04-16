@@ -8,13 +8,14 @@ import wave
 import subprocess
 import gc
 import json
+import time
 import unicodedata
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +41,32 @@ ACTIONS_SUFFIX = ".actions.json"
 EXPERT_SUFFIX = ".expert.json"
 DOCUMENT_SUFFIX = ".document.json"
 
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    try:
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    if value < min_value:
+        value = min_value
+    if value > max_value:
+        value = max_value
+    return value
+
+
+MAX_UPLOAD_MB = _env_int("ARGUS_MAX_UPLOAD_MB", 25, 1, 4096)
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+MAX_AUDIO_SECONDS = _env_int("ARGUS_MAX_AUDIO_SECONDS", 600, 30, 24 * 3600)
+TRANSCRIBE_WORKERS = _env_int("ARGUS_TRANSCRIBE_WORKERS", 1, 1, 4)
+ANALYSIS_WORKERS = _env_int("ARGUS_ANALYSIS_WORKERS", 1, 1, 4)
+TRANSCRIBE_JOB_TIMEOUT_SEC = _env_int("ARGUS_TRANSCRIBE_JOB_TIMEOUT_SEC", 1800, 60, 24 * 3600)
+ANALYSIS_JOB_TIMEOUT_SEC = _env_int("ARGUS_ANALYSIS_JOB_TIMEOUT_SEC", 600, 30, 24 * 3600)
+TRANSCRIBE_TIMEOUT_ERROR = "Расшифровка заняла слишком много времени. Перезапустите расшифровку."
+OVERVIEW_TIMEOUT_ERROR = "Построение обзора заняло слишком много времени. Запустите обзор заново."
+ACTIONS_TIMEOUT_ERROR = "Построение действий заняло слишком много времени. Запустите действия заново."
+EXPERT_TIMEOUT_ERROR = "Экспертный анализ занял слишком много времени. Запустите анализ заново."
+
 # ── TRANSCRIPTION STATE ──────────────────────────────────────
 
 # In-memory job state: filename -> {status, text?, error?}
@@ -50,7 +77,8 @@ DOCUMENT_SUFFIX = ".document.json"
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
-_executor = ThreadPoolExecutor(max_workers=1)
+_transcribe_executor = ThreadPoolExecutor(max_workers=TRANSCRIBE_WORKERS)
+_analysis_executor = ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS)
 
 _ffmpeg_executable = None
 _ffmpeg_checked = False
@@ -223,6 +251,91 @@ def _load_wav_for_whisper(path: str, target_sr: int = 16000):
 
     np.clip(audio, -1.0, 1.0, out=audio)
     return audio
+
+
+def _parse_duration_from_ffmpeg_output(text: str) -> float | None:
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text or "")
+    if not match:
+        return None
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = float(match.group(3))
+    return (hours * 3600) + (minutes * 60) + seconds
+
+
+def _probe_audio_duration_seconds(path: str, extension: str) -> float | None:
+    if extension == ".wav":
+        try:
+            with wave.open(path, "rb") as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+            return (frames / float(rate)) if rate > 0 else None
+        except Exception:
+            return None
+
+    ffmpeg_executable = _resolve_ffmpeg_executable()
+    if not ffmpeg_executable:
+        return None
+
+    try:
+        probe = subprocess.run(
+            [ffmpeg_executable, "-i", path],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=15,
+        )
+        return _parse_duration_from_ffmpeg_output(probe.stderr or "")
+    except Exception:
+        return None
+
+
+def _save_upload_with_limit(upload: UploadFile, destination_path: str) -> int:
+    bytes_written = 0
+    with open(destination_path, "wb") as out:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                break
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Файл превышает лимит {MAX_UPLOAD_MB} MB",
+                )
+            out.write(chunk)
+    return bytes_written
+
+
+def _refresh_running_job_state(job_store: dict, filename: str, timeout_sec: int, timeout_error: str) -> dict | None:
+    job = job_store.get(filename)
+    if not isinstance(job, dict):
+        return None
+    if job.get("status") != "running":
+        return job
+
+    started_raw = job.get("started_at")
+    try:
+        started_at = float(started_raw)
+    except Exception:
+        started_at = 0.0
+
+    if started_at <= 0:
+        return job
+
+    if (time.time() - started_at) > timeout_sec:
+        job_store[filename] = {"status": "error", "error": timeout_error}
+        return job_store[filename]
+
+    return job
+
+
+def _mark_job_running(job_store: dict, filename: str, timeout_sec: int, timeout_error: str) -> bool:
+    job = _refresh_running_job_state(job_store, filename, timeout_sec, timeout_error)
+    if job and job.get("status") == "running":
+        return False
+    job_store[filename] = {"status": "running", "started_at": time.time()}
+    return True
 
 
 def _transcript_path(filename: str) -> str:
@@ -587,7 +700,6 @@ def _run_transcription(filename: str):
 
         # ── STEP 4: copy to temp (retry on PermissionError — Windows file lock) ──
         diag["step"] = "copy2"
-        import time as _time
         for _attempt in range(5):
             try:
                 shutil.copy2(audio_path, tmp_path)
@@ -596,7 +708,7 @@ def _run_transcription(filename: str):
                 diag[f"copy2_attempt_{_attempt}_error"] = str(_pe)
                 if _attempt == 4:
                     raise
-                _time.sleep(0.5 * (_attempt + 1))
+                time.sleep(0.5 * (_attempt + 1))
         diag["tmp_size"] = os.path.getsize(tmp_path)
 
         # ── STEP 5: transcribe from temp ─────────────────────────
@@ -678,8 +790,16 @@ async def upload(file: UploadFile = File(...)):
         save_path = os.path.join(RECORDINGS_DIR, name)
         counter += 1
 
-    with open(save_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    try:
+        _save_upload_with_limit(file, save_path)
+    except HTTPException:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise
+    except Exception as e:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {e}") from e
 
     return {"filename": name}
 
@@ -715,16 +835,20 @@ def delete_recording(filename: str):
     filename, audio_path = _resolve_recording_or_404(filename)
 
     with _jobs_lock:
-        if _jobs.get(filename, {}).get("status") == "running":
+        t_job = _refresh_running_job_state(_jobs, filename, TRANSCRIBE_JOB_TIMEOUT_SEC, TRANSCRIBE_TIMEOUT_ERROR)
+        if t_job and t_job.get("status") == "running":
             raise HTTPException(status_code=409, detail="Нельзя удалить файл во время расшифровки")
     with _overview_jobs_lock:
-        if _overview_jobs.get(filename, {}).get("status") == "running":
+        o_job = _refresh_running_job_state(_overview_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, OVERVIEW_TIMEOUT_ERROR)
+        if o_job and o_job.get("status") == "running":
             raise HTTPException(status_code=409, detail="Нельзя удалить файл во время построения обзора")
     with _actions_jobs_lock:
-        if _actions_jobs.get(filename, {}).get("status") == "running":
+        a_job = _refresh_running_job_state(_actions_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, ACTIONS_TIMEOUT_ERROR)
+        if a_job and a_job.get("status") == "running":
             raise HTTPException(status_code=409, detail="Нельзя удалить файл во время построения действий")
     with _expert_jobs_lock:
-        if _expert_jobs.get(filename, {}).get("status") == "running":
+        e_job = _refresh_running_job_state(_expert_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, EXPERT_TIMEOUT_ERROR)
+        if e_job and e_job.get("status") == "running":
             raise HTTPException(status_code=409, detail="Нельзя удалить файл во время экспертного анализа")
 
     for path in (
@@ -757,14 +881,20 @@ def delete_recording(filename: str):
 
 @app.post("/api/transcribe/{filename}")
 def start_transcription(filename: str):
-    filename, _audio_path = _resolve_recording_or_404(filename)
+    filename, audio_path = _resolve_recording_or_404(filename)
+    ext = os.path.splitext(filename)[1].lower()
+    duration_sec = _probe_audio_duration_seconds(audio_path, ext)
+    if duration_sec and duration_sec > MAX_AUDIO_SECONDS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Длительность аудио ({int(round(duration_sec))} сек) превышает лимит {MAX_AUDIO_SECONDS} сек",
+        )
 
     with _jobs_lock:
-        if _jobs.get(filename, {}).get("status") == "running":
+        if not _mark_job_running(_jobs, filename, TRANSCRIBE_JOB_TIMEOUT_SEC, TRANSCRIBE_TIMEOUT_ERROR):
             return {"status": "running"}
-        _jobs[filename] = {"status": "running"}
 
-    _executor.submit(_run_transcription, filename)
+    _transcribe_executor.submit(_run_transcription, filename)
     return {"status": "running"}
 
 
@@ -773,7 +903,7 @@ def get_transcript(filename: str):
     filename, _audio_path = _resolve_recording_or_404(filename)
 
     with _jobs_lock:
-        job = _jobs.get(filename)
+        job = _refresh_running_job_state(_jobs, filename, TRANSCRIBE_JOB_TIMEOUT_SEC, TRANSCRIBE_TIMEOUT_ERROR)
         if job:
             return job
 
@@ -801,11 +931,10 @@ def start_overview(filename: str):
         return {"status": "no_transcript"}
 
     with _overview_jobs_lock:
-        if _overview_jobs.get(filename, {}).get("status") == "running":
+        if not _mark_job_running(_overview_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, OVERVIEW_TIMEOUT_ERROR):
             return {"status": "running"}
-        _overview_jobs[filename] = {"status": "running"}
 
-    _executor.submit(_run_overview, filename)
+    _analysis_executor.submit(_run_overview, filename)
     return {"status": "running"}
 
 
@@ -818,7 +947,7 @@ def get_overview(filename: str):
         return {"status": "no_transcript"}
 
     with _overview_jobs_lock:
-        job = _overview_jobs.get(filename)
+        job = _refresh_running_job_state(_overview_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, OVERVIEW_TIMEOUT_ERROR)
         if job:
             return job
 
@@ -842,11 +971,10 @@ def start_actions(filename: str):
         return {"status": "no_transcript"}
 
     with _actions_jobs_lock:
-        if _actions_jobs.get(filename, {}).get("status") == "running":
+        if not _mark_job_running(_actions_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, ACTIONS_TIMEOUT_ERROR):
             return {"status": "running"}
-        _actions_jobs[filename] = {"status": "running"}
 
-    _executor.submit(_run_actions, filename)
+    _analysis_executor.submit(_run_actions, filename)
     return {"status": "running"}
 
 
@@ -860,7 +988,7 @@ def get_actions(filename: str):
         return {"status": "no_transcript"}
 
     with _actions_jobs_lock:
-        job = _actions_jobs.get(filename)
+        job = _refresh_running_job_state(_actions_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, ACTIONS_TIMEOUT_ERROR)
         if job:
             return job
 
@@ -887,11 +1015,10 @@ def start_expert(filename: str, analysis_mode: str | None = None):
         return {"status": "no_transcript"}
 
     with _expert_jobs_lock:
-        if _expert_jobs.get(filename, {}).get("status") == "running":
+        if not _mark_job_running(_expert_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, EXPERT_TIMEOUT_ERROR):
             return {"status": "running"}
-        _expert_jobs[filename] = {"status": "running"}
 
-    _executor.submit(_run_expert, filename, analysis_mode)
+    _analysis_executor.submit(_run_expert, filename, analysis_mode)
     return {"status": "running"}
 
 
@@ -905,7 +1032,7 @@ def get_expert(filename: str):
         return {"status": "no_transcript"}
 
     with _expert_jobs_lock:
-        job = _expert_jobs.get(filename)
+        job = _refresh_running_job_state(_expert_jobs, filename, ANALYSIS_JOB_TIMEOUT_SEC, EXPERT_TIMEOUT_ERROR)
         if job:
             return job
 
@@ -959,6 +1086,37 @@ def get_document(filename: str):
             "status": "error",
             "error": "Не удалось прочитать сохранённый черновик документа. Сформируйте заново.",
         }
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz():
+    errors = []
+
+    if not os.path.isdir(RECORDINGS_DIR):
+        errors.append(f"Recordings dir not found: {RECORDINGS_DIR}")
+    else:
+        probe_path = os.path.join(RECORDINGS_DIR, ".argus_write_probe")
+        try:
+            with open(probe_path, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(probe_path)
+        except Exception as e:
+            errors.append(f"Recordings dir is not writable: {e}")
+
+    payload = {
+        "status": "ready" if not errors else "degraded",
+        "recordings_dir": RECORDINGS_DIR,
+        "ffmpeg_available": bool(_resolve_ffmpeg_executable()),
+        "errors": errors,
+    }
+    if errors:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 # Static files must be mounted last

@@ -5,7 +5,7 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
+    healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -17,3 +17,15 @@ services:
         value: int8
       - key: ARGUS_CPU_THREADS
         value: "1"
+      - key: ARGUS_MAX_UPLOAD_MB
+        value: "25"
+      - key: ARGUS_MAX_AUDIO_SECONDS
+        value: "600"
+      - key: ARGUS_TRANSCRIBE_WORKERS
+        value: "1"
+      - key: ARGUS_ANALYSIS_WORKERS
+        value: "1"
+      - key: ARGUS_TRANSCRIBE_JOB_TIMEOUT_SEC
+        value: "1800"
+      - key: ARGUS_ANALYSIS_JOB_TIMEOUT_SEC
+        value: "600"
