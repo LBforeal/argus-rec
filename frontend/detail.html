@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Запись — Аргус</title>
+  <title>Запись — Аргус REC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="detail">
@@ -47,14 +51,18 @@
           </button>
 
           <div class="detail-mode-menu hidden" id="analysis-mode-menu" role="listbox" aria-label="Режим анализа">
+            <button type="button" class="detail-mode-option" data-mode="Обычный пользователь">Обычный пользователь</button>
             <button type="button" class="detail-mode-option" data-mode="Сотрудник МВД">Сотрудник МВД</button>
             <button type="button" class="detail-mode-option is-active" data-mode="Следователь СК">Следователь СК</button>
-            <button type="button" class="detail-mode-option" data-mode="Судья / помощник">Судья / помощник</button>
-            <button type="button" class="detail-mode-option" data-mode="Адвокат / юрист">Адвокат / юрист</button>
-            <button type="button" class="detail-mode-option" data-mode="Служба безопасности">Служба безопасности</button>
-            <button type="button" class="detail-mode-option" data-mode="Прокуратура">Прокуратура</button>
-            <button type="button" class="detail-mode-option" data-mode="Налоговый орган">Налоговый орган</button>
-            <button type="button" class="detail-mode-option" data-mode="МФЦ / приёмная">МФЦ / приёмная</button>
+            <button type="button" class="detail-mode-option" data-mode="Судья">Судья</button>
+            <button type="button" class="detail-mode-option" data-mode="Помощник судьи">Помощник судьи</button>
+            <button type="button" class="detail-mode-option" data-mode="Адвокат">Адвокат</button>
+            <button type="button" class="detail-mode-option" data-mode="Юрист">Юрист</button>
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник службы безопасности">Сотрудник службы безопасности</button>
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник прокуратуры">Сотрудник прокуратуры</button>
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник налоговых органов">Сотрудник налоговых органов</button>
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник МФЦ">Сотрудник МФЦ</button>
+            <button type="button" class="detail-mode-option" data-mode="Сотрудник государственной/муниципальной приёмной">Сотрудник государственной/муниципальной приёмной</button>
           </div>
         </div>
         <button

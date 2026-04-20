@@ -148,3 +148,103 @@
 - Exact next step:
   1. Set Render env for Yandex credentials (`YC_API_KEY`, `YC_FOLDER_ID`) and `ARGUS_STT_PROVIDER=yandex_sync`.
   2. Redeploy and run live e2e check on one real investor-style recording.
+
+---
+
+## Update 2026-04-20 (crash recovery snapshot)
+
+- Date: 2026-04-20
+- Task: check project state after abrupt app close.
+- Changed:
+  - partial UI update in `frontend/index.html`:
+    - onboarding layout blocks (welcome -> mode -> profession);
+    - profile summary element (`#profile-summary`);
+    - existing ids for record/upload/list preserved.
+  - partial UI update in `frontend/detail.html`:
+    - labels switched to clean Russian text;
+    - extended role list in analysis mode dropdown;
+    - existing ids for tabs/player/doc button preserved.
+- Not changed:
+  - `frontend/app.js` still has no onboarding logic.
+  - `frontend/style.css` still has no final styles for onboarding blocks.
+  - backend/API logic unchanged.
+- Risks:
+  - onboarding is markup-only right now (no behavior yet).
+  - new blocks are not in final style until CSS pass is done.
+  - `node` command is unavailable in this environment, JS check via `node --check` was not possible.
+- Exact next step:
+  1. Add onboarding behavior to `frontend/app.js` (step flow + localStorage save).
+  2. Add unified onboarding styles in `frontend/style.css`.
+  3. Run smoke UI checks (record/upload/list + detail tabs + role dropdown + document button).
+
+---
+
+## Update 2026-04-20 (profile flow + button logic sync)
+
+- Date: 2026-04-20
+- Task: finish production UI wiring for new design while preserving existing button/API behavior.
+- Changed:
+  - `frontend/app.js`:
+    - added onboarding/profile flow logic for index screen:
+      - `welcome -> mode -> profession`
+      - open/close overlay
+      - selection state + save to localStorage (`argus_user_profile_v1`)
+      - profile summary update (`#profile-summary`)
+    - added profile-to-analysis-mode sync for detail screen:
+      - auto-apply saved profile to analysis dropdown on page open
+      - persist manual dropdown selection back to storage
+    - all existing API calls and tab logic preserved.
+  - `frontend/style.css`:
+    - added styling for new production blocks:
+      - profile chip in header
+      - onboarding overlay/cards/mode cards/profession cards/actions
+      - responsive behavior for mobile/tablet
+  - `frontend/index.html`, `frontend/detail.html` already aligned with the new structure and required ids.
+- Not changed:
+  - backend API (`backend/main.py`, `backend/ai_module.py`) not changed.
+  - route contracts and tab count remain the same.
+- Risks:
+  - JS syntax check via `node --check` was not possible (`node` missing in current environment).
+  - visual fine-tuning may still be needed after manual browser pass.
+- Exact next step:
+  1. Manual browser smoke test:
+     - index: record/upload/list/delete
+     - onboarding steps + save profile
+     - detail: 4 tabs, dropdown mode, document button
+  2. If all good, commit these 5 files as one atomic UI integration change.
+
+
+---
+
+## Update 2026-04-20 (stability pass: encoding + structure checks)
+
+- Date: 2026-04-20
+- Task: verify current UI integration after interrupted session and remove technical encoding risk.
+- Changed:
+  - frontend/app.js:
+    - removed UTF-8 BOM (rewritten as plain UTF-8 without BOM).
+  - validation checks:
+    - required ids confirmed in frontend/index.html:
+      - btn-record, btn-stop-record, file-input, file-list, upload-status, recording-panel, recording-timer
+      - onboarding-overlay, onboarding-start, onboarding-mode-next, onboarding-finish, btn-open-profile-setup, profile-summary
+    - detail tabs confirmed in frontend/detail.html:
+      - overview, transcript, actions, expert (exactly 4)
+    - no replacement character found (U+FFFD) in:
+      - frontend/index.html, frontend/detail.html, frontend/app.js, frontend/style.css
+- Not changed:
+  - backend files and API routes unchanged.
+  - business logic of record/upload/transcript unchanged.
+- Risks:
+  - node is unavailable in this environment, so node --check frontend/app.js was not possible.
+  - final behavior still needs manual browser smoke test.
+- Exact next step:
+  1. manual browser smoke:
+     - onboarding full path + profile summary persistence
+     - index record/upload/list/delete
+     - detail 4 tabs + mode dropdown + generate document button
+  2. if all green, commit these files together:
+     - frontend/index.html
+     - frontend/detail.html
+     - frontend/app.js
+     - frontend/style.css
+     - knowledge/HANDOFF.md

@@ -6,6 +6,12 @@ let _overviewPoll = null;
 let _actionsPoll = null;
 let _expertPoll = null;
 
+const ARGUS_PROFILE_STORAGE_KEY = 'argus_user_profile_v1';
+const ARGUS_MODE_BASIC = 'basic';
+const ARGUS_MODE_PRO = 'pro';
+const ARGUS_ANALYSIS_MODE_BASIC = 'РћР±С‹С‡РЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ';
+const ARGUS_ANALYSIS_MODE_DEFAULT = 'РЎР»РµРґРѕРІР°С‚РµР»СЊ РЎРљ';
+
 async function _extractApiError(res, fallbackText) {
   try {
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
@@ -26,7 +32,7 @@ if (page === 'index') {
   initDetail();
 }
 
-// ── INDEX PAGE ──────────────────────────────────────────────
+// в”Ђв”Ђ INDEX PAGE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 function initIndex() {
   document.getElementById('btn-record').addEventListener('click', _startRecording);
@@ -35,10 +41,197 @@ function initIndex() {
   document.getElementById('file-list').addEventListener('click', _handleFileListClick);
   document.getElementById('file-list').addEventListener('keydown', _handleFileListClick);
 
+  _initProfileSetupFlow();
   loadFileList();
 }
 
-// ── RECORDING ───────────────────────────────────────────────
+function _getStoredProfile() {
+  try {
+    const raw = localStorage.getItem(ARGUS_PROFILE_STORAGE_KEY);
+    if (!raw) return { mode: '', profession: '' };
+    const parsed = JSON.parse(raw);
+    const mode = parsed?.mode === ARGUS_MODE_BASIC || parsed?.mode === ARGUS_MODE_PRO
+      ? parsed.mode
+      : '';
+    const profession = typeof parsed?.profession === 'string' ? parsed.profession.trim() : '';
+    return { mode, profession };
+  } catch (_) {
+    return { mode: '', profession: '' };
+  }
+}
+
+function _saveStoredProfile(profile) {
+  try {
+    localStorage.setItem(ARGUS_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch (_) {}
+}
+
+function _profileToAnalysisMode(profile) {
+  if (!profile || !profile.mode) return ARGUS_ANALYSIS_MODE_DEFAULT;
+  if (profile.mode === ARGUS_MODE_BASIC) return ARGUS_ANALYSIS_MODE_BASIC;
+  if (profile.profession) return profile.profession;
+  return ARGUS_ANALYSIS_MODE_DEFAULT;
+}
+
+function _analysisModeToProfile(mode) {
+  const normalized = (mode || '').trim();
+  if (!normalized || normalized === ARGUS_ANALYSIS_MODE_BASIC) {
+    return { mode: ARGUS_MODE_BASIC, profession: '' };
+  }
+  return { mode: ARGUS_MODE_PRO, profession: normalized };
+}
+
+function _formatProfileSummary(profile) {
+  if (!profile || !profile.mode) return 'РџСЂРѕС„РёР»СЊ РЅРµ РІС‹Р±СЂР°РЅ';
+  if (profile.mode === ARGUS_MODE_BASIC) return 'РћР±С‹С‡РЅС‹Р№ СЂРµР¶РёРј';
+  return profile.profession || ARGUS_ANALYSIS_MODE_DEFAULT;
+}
+
+function _applyProfileSummary() {
+  const summary = document.getElementById('profile-summary');
+  if (!summary) return;
+  summary.textContent = _formatProfileSummary(_getStoredProfile());
+}
+
+function _initProfileSetupFlow() {
+  const overlay = document.getElementById('onboarding-overlay');
+  if (!overlay) {
+    _applyProfileSummary();
+    return;
+  }
+
+  const openButton = document.getElementById('btn-open-profile-setup');
+  const cards = Array.from(overlay.querySelectorAll('[data-onboarding-step]'));
+  const modeCards = Array.from(overlay.querySelectorAll('[data-mode-card]'));
+  const professionCards = Array.from(overlay.querySelectorAll('.onboarding-profession-card'));
+  const closeButtons = Array.from(overlay.querySelectorAll('[data-close-onboarding], #onboarding-close'));
+
+  const startButton = document.getElementById('onboarding-start');
+  const modeBackButton = document.getElementById('onboarding-mode-back');
+  const modeNextButton = document.getElementById('onboarding-mode-next');
+  const professionBackButton = document.getElementById('onboarding-profession-back');
+  const finishButton = document.getElementById('onboarding-finish');
+
+  let selectedMode = '';
+  let selectedProfession = '';
+  let activeStep = 'welcome';
+
+  const syncButtons = () => {
+    if (modeNextButton) modeNextButton.disabled = !selectedMode;
+    if (finishButton) finishButton.disabled = selectedMode === ARGUS_MODE_PRO && !selectedProfession;
+  };
+
+  const syncModeUI = () => {
+    modeCards.forEach((card) => {
+      card.classList.toggle('is-selected', card.dataset.mode === selectedMode);
+    });
+    syncButtons();
+  };
+
+  const syncProfessionUI = () => {
+    professionCards.forEach((card) => {
+      card.classList.toggle('is-selected', card.dataset.profession === selectedProfession);
+    });
+    syncButtons();
+  };
+
+  const showStep = (step) => {
+    activeStep = step;
+    cards.forEach((card) => {
+      card.classList.toggle('hidden', card.dataset.onboardingStep !== step);
+    });
+    syncButtons();
+  };
+
+  const openOverlay = (step) => {
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-onboarding-open');
+    showStep(step || activeStep);
+  };
+
+  const closeOverlay = () => {
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('is-onboarding-open');
+  };
+
+  const loadFromStorage = () => {
+    const saved = _getStoredProfile();
+    selectedMode = saved.mode;
+    selectedProfession = saved.profession;
+    syncModeUI();
+    syncProfessionUI();
+  };
+
+  const saveSelection = () => {
+    const profile = selectedMode === ARGUS_MODE_PRO
+      ? { mode: ARGUS_MODE_PRO, profession: selectedProfession || ARGUS_ANALYSIS_MODE_DEFAULT }
+      : { mode: ARGUS_MODE_BASIC, profession: '' };
+    _saveStoredProfile(profile);
+    _applyProfileSummary();
+  };
+
+  modeCards.forEach((card) => {
+    card.addEventListener('click', () => {
+      selectedMode = card.dataset.mode || '';
+      if (selectedMode === ARGUS_MODE_BASIC) selectedProfession = '';
+      syncModeUI();
+      syncProfessionUI();
+    });
+  });
+
+  professionCards.forEach((card) => {
+    card.addEventListener('click', () => {
+      selectedProfession = card.dataset.profession || '';
+      syncProfessionUI();
+    });
+  });
+
+  if (startButton) startButton.addEventListener('click', () => showStep('mode'));
+  if (modeBackButton) modeBackButton.addEventListener('click', () => showStep('welcome'));
+  if (modeNextButton) {
+    modeNextButton.addEventListener('click', () => {
+      if (!selectedMode) return;
+      if (selectedMode === ARGUS_MODE_BASIC) {
+        saveSelection();
+        closeOverlay();
+        return;
+      }
+      showStep('profession');
+    });
+  }
+  if (professionBackButton) professionBackButton.addEventListener('click', () => showStep('mode'));
+  if (finishButton) {
+    finishButton.addEventListener('click', () => {
+      if (selectedMode === ARGUS_MODE_PRO && !selectedProfession) return;
+      saveSelection();
+      closeOverlay();
+    });
+  }
+
+  closeButtons.forEach((button) => button.addEventListener('click', closeOverlay));
+  overlay.addEventListener('click', (event) => {
+    if (event.target && event.target.hasAttribute('data-close-onboarding')) closeOverlay();
+  });
+
+  if (openButton) {
+    openButton.addEventListener('click', () => {
+      loadFromStorage();
+      if (selectedMode === ARGUS_MODE_PRO) showStep('profession');
+      else showStep('mode');
+      openOverlay(activeStep);
+    });
+  }
+
+  _applyProfileSummary();
+  loadFromStorage();
+  const savedProfile = _getStoredProfile();
+  if (!savedProfile.mode) openOverlay('welcome');
+  else closeOverlay();
+}
+
+// в”Ђв”Ђ RECORDING в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 let _mediaRecorder = null;
 let _recordedChunks = [];
@@ -53,14 +246,14 @@ async function _startRecording() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     status.hidden = false;
     status.className = 'upload-status error';
-    status.textContent = 'Запись недоступна в этом браузере. Откройте на localhost или используйте HTTPS.';
+    status.textContent = 'Р—Р°РїРёСЃСЊ РЅРµРґРѕСЃС‚СѓРїРЅР° РІ СЌС‚РѕРј Р±СЂР°СѓР·РµСЂРµ. РћС‚РєСЂРѕР№С‚Рµ РЅР° localhost РёР»Рё РёСЃРїРѕР»СЊР·СѓР№С‚Рµ HTTPS.';
     return;
   }
 
   if (typeof MediaRecorder === 'undefined') {
     status.hidden = false;
     status.className = 'upload-status error';
-    status.textContent = 'Браузер не поддерживает запись через MediaRecorder.';
+    status.textContent = 'Р‘СЂР°СѓР·РµСЂ РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ Р·Р°РїРёСЃСЊ С‡РµСЂРµР· MediaRecorder.';
     return;
   }
 
@@ -71,11 +264,11 @@ async function _startRecording() {
     status.hidden = false;
     status.className = 'upload-status error';
     if (err.name === 'NotAllowedError') {
-      status.textContent = 'Доступ к микрофону запрещён. Разрешите доступ в настройках браузера.';
+      status.textContent = 'Р”РѕСЃС‚СѓРї Рє РјРёРєСЂРѕС„РѕРЅСѓ Р·Р°РїСЂРµС‰С‘РЅ. Р Р°Р·СЂРµС€РёС‚Рµ РґРѕСЃС‚СѓРї РІ РЅР°СЃС‚СЂРѕР№РєР°С… Р±СЂР°СѓР·РµСЂР°.';
     } else if (err.name === 'NotFoundError') {
-      status.textContent = 'Микрофон не найден. Подключите микрофон и попробуйте снова.';
+      status.textContent = 'РњРёРєСЂРѕС„РѕРЅ РЅРµ РЅР°Р№РґРµРЅ. РџРѕРґРєР»СЋС‡РёС‚Рµ РјРёРєСЂРѕС„РѕРЅ Рё РїРѕРїСЂРѕР±СѓР№С‚Рµ СЃРЅРѕРІР°.';
     } else {
-      status.textContent = `Не удалось получить доступ к микрофону: ${err.message}`;
+      status.textContent = `РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РґРѕСЃС‚СѓРї Рє РјРёРєСЂРѕС„РѕРЅСѓ: ${err.message}`;
     }
     return;
   }
@@ -99,7 +292,7 @@ async function _startRecording() {
     _releaseStream();
     status.hidden = false;
     status.className = 'upload-status error';
-    status.textContent = `Не удалось запустить запись: ${err.message}`;
+    status.textContent = `РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ Р·Р°РїРёСЃСЊ: ${err.message}`;
     return;
   }
 
@@ -119,7 +312,7 @@ async function _startRecording() {
     if (blob.size === 0) {
       status.hidden = false;
       status.className = 'upload-status error';
-      status.textContent = 'Запись пуста. Попробуйте снова.';
+      status.textContent = 'Р—Р°РїРёСЃСЊ РїСѓСЃС‚Р°. РџРѕРїСЂРѕР±СѓР№С‚Рµ СЃРЅРѕРІР°.';
       return;
     }
 
@@ -129,7 +322,7 @@ async function _startRecording() {
     } catch (err) {
       status.hidden = false;
       status.className = 'upload-status error';
-      status.textContent = `Не удалось обработать запись: ${err.message}`;
+      status.textContent = `РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±СЂР°Р±РѕС‚Р°С‚СЊ Р·Р°РїРёСЃСЊ: ${err.message}`;
       return;
     }
 
@@ -143,20 +336,20 @@ async function _startRecording() {
 
     status.hidden = false;
     status.className = 'upload-status';
-    status.textContent = 'Сохранение записи…';
+    status.textContent = 'РЎРѕС…СЂР°РЅРµРЅРёРµ Р·Р°РїРёСЃРёвЂ¦';
 
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: formData });
       if (!res.ok) {
-        const msg = await _extractApiError(res, 'Ошибка сохранения');
+        const msg = await _extractApiError(res, 'РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ');
         throw new Error(msg);
       }
       status.className = 'upload-status success';
-      status.textContent = 'Запись сохранена.';
+      status.textContent = 'Р—Р°РїРёСЃСЊ СЃРѕС…СЂР°РЅРµРЅР°.';
       await loadFileList();
     } catch (err) {
       status.className = 'upload-status error';
-      status.textContent = `Ошибка сохранения записи: ${err.message}`;
+      status.textContent = `РћС€РёР±РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ Р·Р°РїРёСЃРё: ${err.message}`;
     }
   };
 
@@ -166,7 +359,7 @@ async function _startRecording() {
     _setRecordingUi(false);
     status.hidden = false;
     status.className = 'upload-status error';
-    status.textContent = 'Ошибка записи. Попробуйте снова.';
+    status.textContent = 'РћС€РёР±РєР° Р·Р°РїРёСЃРё. РџРѕРїСЂРѕР±СѓР№С‚Рµ СЃРЅРѕРІР°.';
   };
 
   _mediaRecorder.start();
@@ -220,7 +413,7 @@ async function handleFileUpload(event) {
   const status = document.getElementById('upload-status');
   status.hidden = false;
   status.className = 'upload-status';
-  status.textContent = `Загрузка файла "${file.name}"...`;
+  status.textContent = `Р—Р°РіСЂСѓР·РєР° С„Р°Р№Р»Р° "${file.name}"...`;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -228,18 +421,18 @@ async function handleFileUpload(event) {
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: formData });
     if (!res.ok) {
-      const msg = await _extractApiError(res, 'Неизвестная ошибка');
+      const msg = await _extractApiError(res, 'РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°');
       throw new Error(msg);
     }
     status.className = 'upload-status success';
-    status.textContent = 'Файл успешно загружен.';
+    status.textContent = 'Р¤Р°Р№Р» СѓСЃРїРµС€РЅРѕ Р·Р°РіСЂСѓР¶РµРЅ.';
     await loadFileList();
   } catch (err) {
     status.className = 'upload-status error';
-    status.textContent = `Ошибка загрузки: ${err.message}`;
+    status.textContent = `РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё: ${err.message}`;
   }
 
-  // Сброс, чтобы можно было загрузить тот же файл повторно
+  // РЎР±СЂРѕСЃ, С‡С‚РѕР±С‹ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ Р·Р°РіСЂСѓР·РёС‚СЊ С‚РѕС‚ Р¶Рµ С„Р°Р№Р» РїРѕРІС‚РѕСЂРЅРѕ
   event.target.value = '';
 }
 
@@ -247,11 +440,11 @@ async function loadFileList() {
   const container = document.getElementById('file-list');
   try {
     const res = await fetch('/api/recordings');
-    if (!res.ok) throw new Error('Ошибка сервера');
+    if (!res.ok) throw new Error('РћС€РёР±РєР° СЃРµСЂРІРµСЂР°');
     const files = await res.json();
 
     if (files.length === 0) {
-      container.innerHTML = '<div class="empty-state">Нет записей. Загрузите первый файл.</div>';
+      container.innerHTML = '<div class="empty-state">РќРµС‚ Р·Р°РїРёСЃРµР№. Р—Р°РіСЂСѓР·РёС‚Рµ РїРµСЂРІС‹Р№ С„Р°Р№Р».</div>';
       return;
     }
 
@@ -261,16 +454,16 @@ async function loadFileList() {
         <article class="file-item" data-open-file="${encoded}" role="link" tabindex="0">
           <div class="file-main" data-open-file="${encoded}">
             <div class="file-name">${escapeHtml(f.filename)}</div>
-            <div class="file-meta">${formatSize(f.size)} · ${formatDate(f.modified)}</div>
+            <div class="file-meta">${formatSize(f.size)} В· ${formatDate(f.modified)}</div>
           </div>
-          <button class="file-delete-btn" type="button" data-delete-file="${encoded}" aria-label="Удалить запись ${escapeHtml(f.filename)}">
-            Удалить
+          <button class="file-delete-btn" type="button" data-delete-file="${encoded}" aria-label="РЈРґР°Р»РёС‚СЊ Р·Р°РїРёСЃСЊ ${escapeHtml(f.filename)}">
+            РЈРґР°Р»РёС‚СЊ
           </button>
         </article>
       `;
     }).join('');
   } catch (err) {
-    container.innerHTML = `<div class="empty-state error-text">Не удалось загрузить список файлов: ${escapeHtml(err.message || err)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ СЃРїРёСЃРѕРє С„Р°Р№Р»РѕРІ: ${escapeHtml(err.message || err)}</div>`;
   }
 }
 
@@ -313,17 +506,17 @@ function _openRecordingDetail(filename) {
 
 async function _deleteRecording(filename) {
   const status = document.getElementById('upload-status');
-  const ok = window.confirm(`Удалить запись "${filename}"?\nЭто действие нельзя отменить.`);
+  const ok = window.confirm(`РЈРґР°Р»РёС‚СЊ Р·Р°РїРёСЃСЊ "${filename}"?\nР­С‚Рѕ РґРµР№СЃС‚РІРёРµ РЅРµР»СЊР·СЏ РѕС‚РјРµРЅРёС‚СЊ.`);
   if (!ok) return;
 
   status.hidden = false;
   status.className = 'upload-status';
-  status.textContent = 'Удаление записи…';
+  status.textContent = 'РЈРґР°Р»РµРЅРёРµ Р·Р°РїРёСЃРёвЂ¦';
 
   try {
     const res = await fetch(`/api/recordings/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     if (!res.ok) {
-      let message = `Ошибка удаления (HTTP ${res.status})`;
+      let message = `РћС€РёР±РєР° СѓРґР°Р»РµРЅРёСЏ (HTTP ${res.status})`;
       try {
         const data = await res.json();
         if (data && data.detail) message = data.detail;
@@ -332,15 +525,15 @@ async function _deleteRecording(filename) {
     }
 
     status.className = 'upload-status success';
-    status.textContent = 'Запись удалена.';
+    status.textContent = 'Р—Р°РїРёСЃСЊ СѓРґР°Р»РµРЅР°.';
     await loadFileList();
   } catch (err) {
     status.className = 'upload-status error';
-    status.textContent = `Не удалось удалить запись: ${err.message || err}`;
+    status.textContent = `РќРµ СѓРґР°Р»РѕСЃСЊ СѓРґР°Р»РёС‚СЊ Р·Р°РїРёСЃСЊ: ${err.message || err}`;
   }
 }
 
-// ── DETAIL PAGE ─────────────────────────────────────────────
+// в”Ђв”Ђ DETAIL PAGE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 function initDetail() {
   const params = new URLSearchParams(window.location.search);
@@ -348,15 +541,15 @@ function initDetail() {
   const filename = _decodeFilenameFromAttr(rawFilename) || (rawFilename || '').trim();
 
   if (!filename) {
-    document.getElementById('file-title').textContent = 'Файл не найден';
+    document.getElementById('file-title').textContent = 'Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ';
     return;
   }
 
   _currentFilename = filename;
   document.getElementById('file-title').textContent = filename;
   const detailMeta = document.getElementById('detail-meta');
-  if (detailMeta) detailMeta.textContent = `Файл: ${filename}`;
-  document.title = `${filename} — Аргус`;
+  if (detailMeta) detailMeta.textContent = `Р¤Р°Р№Р»: ${filename}`;
+  document.title = `${filename} вЂ” РђСЂРіСѓСЃ`;
 
   document.getElementById('audio-player').src =
     `/api/recordings/${encodeURIComponent(filename)}`;
@@ -381,9 +574,10 @@ function initDetail() {
   });
 
   _initAnalysisModeSelector();
+  _applyStoredAnalysisModeToDetail();
   _initDocumentGenerator(filename);
 
-  // Обзор — активный таб по умолчанию, загружаем сразу
+  // РћР±Р·РѕСЂ вЂ” Р°РєС‚РёРІРЅС‹Р№ С‚Р°Р± РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ, Р·Р°РіСЂСѓР¶Р°РµРј СЃСЂР°Р·Сѓ
   _loadOverviewState(filename);
 
   window.addEventListener('beforeunload', () => {
@@ -422,9 +616,8 @@ function _initAnalysisModeSelector() {
   menu.querySelectorAll('.detail-mode-option').forEach((option) => {
     option.addEventListener('click', () => {
       const mode = option.dataset.mode || option.textContent || '';
-      value.textContent = mode.trim();
-      menu.querySelectorAll('.detail-mode-option').forEach((el) => el.classList.remove('is-active'));
-      option.classList.add('is-active');
+      _setAnalysisMode(mode.trim());
+      _persistSelectedAnalysisMode(mode.trim());
       close();
     });
   });
@@ -441,7 +634,30 @@ function _initAnalysisModeSelector() {
 function _getSelectedAnalysisMode() {
   const value = document.getElementById('analysis-mode-value');
   const mode = (value?.textContent || '').trim();
-  return mode || 'Следователь СК';
+  return mode || _profileToAnalysisMode(_getStoredProfile()) || ARGUS_ANALYSIS_MODE_DEFAULT;
+}
+
+function _setAnalysisMode(mode) {
+  const menu = document.getElementById('analysis-mode-menu');
+  const value = document.getElementById('analysis-mode-value');
+  if (!menu || !value) return;
+
+  const normalized = (mode || '').trim();
+  if (!normalized) return;
+
+  value.textContent = normalized;
+  menu.querySelectorAll('.detail-mode-option').forEach((el) => {
+    el.classList.toggle('is-active', (el.dataset.mode || '').trim() === normalized);
+  });
+}
+
+function _persistSelectedAnalysisMode(mode) {
+  _saveStoredProfile(_analysisModeToProfile(mode));
+}
+
+function _applyStoredAnalysisModeToDetail() {
+  const modeFromProfile = _profileToAnalysisMode(_getStoredProfile());
+  _setAnalysisMode(modeFromProfile);
 }
 
 function _initDocumentGenerator(filename) {
@@ -460,39 +676,39 @@ function _setDocumentStatus(message, isError = false) {
 }
 
 async function _generateDocument(filename, button) {
-  const baseLabel = 'Сформировать документ';
+  const baseLabel = 'РЎС„РѕСЂРјРёСЂРѕРІР°С‚СЊ РґРѕРєСѓРјРµРЅС‚';
   button.disabled = true;
-  button.textContent = 'Формируем...';
-  _setDocumentStatus('Сбор черновика документа из записи...');
+  button.textContent = 'Р¤РѕСЂРјРёСЂСѓРµРј...';
+  _setDocumentStatus('РЎР±РѕСЂ С‡РµСЂРЅРѕРІРёРєР° РґРѕРєСѓРјРµРЅС‚Р° РёР· Р·Р°РїРёСЃРё...');
 
   try {
     const res = await fetch(`/api/document/${encodeURIComponent(filename)}`, { method: 'POST' });
     if (!res.ok) {
-      const message = await _extractApiError(res, 'Ошибка формирования документа');
+      const message = await _extractApiError(res, 'РћС€РёР±РєР° С„РѕСЂРјРёСЂРѕРІР°РЅРёСЏ РґРѕРєСѓРјРµРЅС‚Р°');
       throw new Error(message);
     }
 
     const data = await res.json();
     if (data.status === 'no_transcript') {
-      _setDocumentStatus('Документ недоступен: сначала запустите и дождитесь готового транскрипта.', true);
+      _setDocumentStatus('Р”РѕРєСѓРјРµРЅС‚ РЅРµРґРѕСЃС‚СѓРїРµРЅ: СЃРЅР°С‡Р°Р»Р° Р·Р°РїСѓСЃС‚РёС‚Рµ Рё РґРѕР¶РґРёС‚РµСЃСЊ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.', true);
       return;
     }
     if (data.status !== 'done') {
-      _setDocumentStatus(`Не удалось сформировать документ: ${data.error || 'неизвестная ошибка'}`, true);
+      _setDocumentStatus(`РќРµ СѓРґР°Р»РѕСЃСЊ СЃС„РѕСЂРјРёСЂРѕРІР°С‚СЊ РґРѕРєСѓРјРµРЅС‚: ${data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°'}`, true);
       return;
     }
 
     const text = data?.document?.text || '';
     if (!text.trim()) {
-      _setDocumentStatus('Документ сформирован без содержимого. Проверьте наличие данных в записи.', true);
+      _setDocumentStatus('Р”РѕРєСѓРјРµРЅС‚ СЃС„РѕСЂРјРёСЂРѕРІР°РЅ Р±РµР· СЃРѕРґРµСЂР¶РёРјРѕРіРѕ. РџСЂРѕРІРµСЂСЊС‚Рµ РЅР°Р»РёС‡РёРµ РґР°РЅРЅС‹С… РІ Р·Р°РїРёСЃРё.', true);
       return;
     }
 
     const safeName = String(filename).replace(/[\\/:*?"<>|]+/g, '_');
     _downloadTextFile(`${safeName}.osmotr.chernovik.txt`, text);
-    _setDocumentStatus('Черновик документа сформирован и скачан.');
+    _setDocumentStatus('Р§РµСЂРЅРѕРІРёРє РґРѕРєСѓРјРµРЅС‚Р° СЃС„РѕСЂРјРёСЂРѕРІР°РЅ Рё СЃРєР°С‡Р°РЅ.');
   } catch (err) {
-    _setDocumentStatus(`Не удалось сформировать документ: ${err.message || err}`, true);
+    _setDocumentStatus(`РќРµ СѓРґР°Р»РѕСЃСЊ СЃС„РѕСЂРјРёСЂРѕРІР°С‚СЊ РґРѕРєСѓРјРµРЅС‚: ${err.message || err}`, true);
   } finally {
     button.disabled = false;
     button.textContent = baseLabel;
@@ -511,21 +727,21 @@ function _downloadTextFile(fileName, text) {
   URL.revokeObjectURL(url);
 }
 
-// ── TRANSCRIPT TAB ───────────────────────────────────────────
+// в”Ђв”Ђ TRANSCRIPT TAB в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async function _loadTranscriptState(filename) {
   const container = document.getElementById('transcript-state');
   try {
     const res = await fetch(`/api/transcript/${encodeURIComponent(filename)}`);
     if (!res.ok) {
-      const message = await _extractApiError(res, 'Ошибка сервера');
+      const message = await _extractApiError(res, 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°');
       throw new Error(message);
     }
     const data = await res.json();
     _renderTranscriptState(data, filename, container);
   } catch (e) {
     _clearTranscriptPoll();
-    container.innerHTML = `<div class="empty-state error-text">Не удалось получить статус транскрипта: ${escapeHtml(e.message || e)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃС‚Р°С‚СѓСЃ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°: ${escapeHtml(e.message || e)}</div>`;
   }
 }
 
@@ -534,56 +750,56 @@ function _renderTranscriptState(data, filename, container) {
 
   if (data.status === 'idle') {
     container.innerHTML = `
-      <div class="empty-state">Транскрипт ещё не запущен.</div>
+      <div class="empty-state">РўСЂР°РЅСЃРєСЂРёРїС‚ РµС‰С‘ РЅРµ Р·Р°РїСѓС‰РµРЅ.</div>
       <div class="transcript-actions">
-        <button class="btn btn-primary" id="btn-start-transcript">Начать расшифровку</button>
+        <button class="btn btn-primary" id="btn-start-transcript">РќР°С‡Р°С‚СЊ СЂР°СЃС€РёС„СЂРѕРІРєСѓ</button>
       </div>
     `;
     document.getElementById('btn-start-transcript')
       .addEventListener('click', () => _startTranscription(filename));
 
   } else if (data.status === 'running') {
-    container.innerHTML = '<div class="empty-state">Идёт расшифровка…</div>';
+    container.innerHTML = '<div class="empty-state">РРґС‘С‚ СЂР°СЃС€РёС„СЂРѕРІРєР°вЂ¦</div>';
     _transcriptPoll = setInterval(() => _loadTranscriptState(filename), 3000);
 
   } else if (data.status === 'done') {
     if (!data.text || !data.text.trim()) {
-      container.innerHTML = '<div class="empty-state">Транскрипт пуст.</div>';
+      container.innerHTML = '<div class="empty-state">РўСЂР°РЅСЃРєСЂРёРїС‚ РїСѓСЃС‚.</div>';
     } else {
       container.innerHTML = `<div class="transcript-text">${escapeHtml(data.text)}</div>`;
     }
 
   } else if (data.status === 'error') {
     container.innerHTML = `
-      <div class="empty-state error-text">Ошибка расшифровки: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+      <div class="empty-state error-text">РћС€РёР±РєР° СЂР°СЃС€РёС„СЂРѕРІРєРё: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-transcript">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-transcript">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-transcript')
       .addEventListener('click', () => _startTranscription(filename));
 
   } else {
-    container.innerHTML = `<div class="empty-state error-text">Неожиданный статус от сервера: ${escapeHtml(data.status)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµРѕР¶РёРґР°РЅРЅС‹Р№ СЃС‚Р°С‚СѓСЃ РѕС‚ СЃРµСЂРІРµСЂР°: ${escapeHtml(data.status)}</div>`;
   }
 }
 
 async function _startTranscription(filename) {
   const container = document.getElementById('transcript-state');
-  container.innerHTML = '<div class="empty-state">Идёт расшифровка…</div>';
+  container.innerHTML = '<div class="empty-state">РРґС‘С‚ СЂР°СЃС€РёС„СЂРѕРІРєР°вЂ¦</div>';
 
   try {
     const res = await fetch(`/api/transcribe/${encodeURIComponent(filename)}`, { method: 'POST' });
     if (!res.ok) {
-      const message = await _extractApiError(res, 'Ошибка запуска');
+      const message = await _extractApiError(res, 'РћС€РёР±РєР° Р·Р°РїСѓСЃРєР°');
       throw new Error(message);
     }
     _transcriptPoll = setInterval(() => _loadTranscriptState(filename), 3000);
   } catch (err) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить расшифровку: ${escapeHtml(err.message || err)}</div>
+      <div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ СЂР°СЃС€РёС„СЂРѕРІРєСѓ: ${escapeHtml(err.message || err)}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-transcript">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-transcript">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-transcript')
@@ -598,17 +814,17 @@ function _clearTranscriptPoll() {
   }
 }
 
-// ── OVERVIEW TAB ─────────────────────────────────────────────
+// в”Ђв”Ђ OVERVIEW TAB в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async function _loadOverviewState(filename) {
   const container = document.getElementById('overview-state');
   try {
     const res = await fetch(`/api/overview/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error('Ошибка сервера');
+    if (!res.ok) throw new Error('РћС€РёР±РєР° СЃРµСЂРІРµСЂР°');
     const data = await res.json();
     _renderOverviewState(data, filename, container);
   } catch (e) {
-    container.innerHTML = `<div class="empty-state error-text">Не удалось получить статус обзора: ${escapeHtml(e.message || e)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃС‚Р°С‚СѓСЃ РѕР±Р·РѕСЂР°: ${escapeHtml(e.message || e)}</div>`;
   }
 }
 
@@ -616,61 +832,61 @@ function _renderOverviewState(data, filename, container) {
   _clearOverviewPoll();
 
   if (data.status === 'no_transcript') {
-    container.innerHTML = '<div class="empty-state">Обзор недоступен: нет готового транскрипта.</div>';
+    container.innerHTML = '<div class="empty-state">РћР±Р·РѕСЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ: РЅРµС‚ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.</div>';
 
   } else if (data.status === 'idle') {
     container.innerHTML = `
-      <div class="empty-state">Обзор ещё не запущен.</div>
+      <div class="empty-state">РћР±Р·РѕСЂ РµС‰С‘ РЅРµ Р·Р°РїСѓС‰РµРЅ.</div>
       <div class="transcript-actions">
-        <button class="btn btn-primary" id="btn-start-overview">Построить обзор</button>
+        <button class="btn btn-primary" id="btn-start-overview">РџРѕСЃС‚СЂРѕРёС‚СЊ РѕР±Р·РѕСЂ</button>
       </div>
     `;
     document.getElementById('btn-start-overview')
       .addEventListener('click', () => _startOverview(filename));
 
   } else if (data.status === 'running') {
-    container.innerHTML = '<div class="empty-state">Идёт построение обзора…</div>';
+    container.innerHTML = '<div class="empty-state">РРґС‘С‚ РїРѕСЃС‚СЂРѕРµРЅРёРµ РѕР±Р·РѕСЂР°вЂ¦</div>';
     _overviewPoll = setInterval(() => _loadOverviewState(filename), 2000);
 
   } else if (data.status === 'done') {
     if (!data.text || !data.text.trim()) {
-      container.innerHTML = '<div class="empty-state">Обзор пуст.</div>';
+      container.innerHTML = '<div class="empty-state">РћР±Р·РѕСЂ РїСѓСЃС‚.</div>';
     } else {
       container.innerHTML = `<div class="transcript-text">${escapeHtml(data.text)}</div>`;
     }
 
   } else if (data.status === 'error') {
     container.innerHTML = `
-      <div class="empty-state error-text">Ошибка построения обзора: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+      <div class="empty-state error-text">РћС€РёР±РєР° РїРѕСЃС‚СЂРѕРµРЅРёСЏ РѕР±Р·РѕСЂР°: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-overview">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-overview">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-overview')
       .addEventListener('click', () => _startOverview(filename));
 
   } else {
-    container.innerHTML = `<div class="empty-state error-text">Неожиданный статус от сервера: ${escapeHtml(data.status)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµРѕР¶РёРґР°РЅРЅС‹Р№ СЃС‚Р°С‚СѓСЃ РѕС‚ СЃРµСЂРІРµСЂР°: ${escapeHtml(data.status)}</div>`;
   }
 }
 
 async function _startOverview(filename) {
   const container = document.getElementById('overview-state');
-  container.innerHTML = '<div class="empty-state">Идёт построение обзора…</div>';
+  container.innerHTML = '<div class="empty-state">РРґС‘С‚ РїРѕСЃС‚СЂРѕРµРЅРёРµ РѕР±Р·РѕСЂР°вЂ¦</div>';
 
   try {
     const res = await fetch(`/api/overview/${encodeURIComponent(filename)}`, { method: 'POST' });
-    if (!res.ok) throw new Error(`Ошибка запуска (HTTP ${res.status})`);
+    if (!res.ok) throw new Error(`РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° (HTTP ${res.status})`);
     const data = await res.json();
     if (data.status === 'no_transcript') {
-      container.innerHTML = '<div class="empty-state">Обзор недоступен: нет готового транскрипта.</div>';
+      container.innerHTML = '<div class="empty-state">РћР±Р·РѕСЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ: РЅРµС‚ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.</div>';
       return;
     }
     if (data.status === 'error') {
       container.innerHTML = `
-        <div class="empty-state error-text">Ошибка построения обзора: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+        <div class="empty-state error-text">РћС€РёР±РєР° РїРѕСЃС‚СЂРѕРµРЅРёСЏ РѕР±Р·РѕСЂР°: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
         <div class="transcript-actions">
-          <button class="btn btn-secondary" id="btn-retry-overview">Попробовать снова</button>
+          <button class="btn btn-secondary" id="btn-retry-overview">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
         </div>
       `;
       document.getElementById('btn-retry-overview')
@@ -680,9 +896,9 @@ async function _startOverview(filename) {
     _overviewPoll = setInterval(() => _loadOverviewState(filename), 2000);
   } catch (e) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить построение обзора: ${escapeHtml(e.message || e)}</div>
+      <div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ РїРѕСЃС‚СЂРѕРµРЅРёРµ РѕР±Р·РѕСЂР°: ${escapeHtml(e.message || e)}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-overview">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-overview">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-overview')
@@ -697,17 +913,17 @@ function _clearOverviewPoll() {
   }
 }
 
-// ── ACTIONS TAB ──────────────────────────────────────────────
+// в”Ђв”Ђ ACTIONS TAB в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async function _loadActionsState(filename) {
   const container = document.getElementById('actions-state');
   try {
     const res = await fetch(`/api/actions/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error('Ошибка сервера');
+    if (!res.ok) throw new Error('РћС€РёР±РєР° СЃРµСЂРІРµСЂР°');
     const data = await res.json();
     _renderActionsState(data, filename, container);
   } catch (e) {
-    container.innerHTML = `<div class="empty-state error-text">Не удалось получить статус действий: ${escapeHtml(e.message || e)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃС‚Р°С‚СѓСЃ РґРµР№СЃС‚РІРёР№: ${escapeHtml(e.message || e)}</div>`;
   }
 }
 
@@ -715,25 +931,25 @@ function _renderActionsState(data, filename, container) {
   _clearActionsPoll();
 
   if (data.status === 'no_transcript') {
-    container.innerHTML = '<div class="empty-state">Действия недоступны: нет готового транскрипта.</div>';
+    container.innerHTML = '<div class="empty-state">Р”РµР№СЃС‚РІРёСЏ РЅРµРґРѕСЃС‚СѓРїРЅС‹: РЅРµС‚ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.</div>';
 
   } else if (data.status === 'idle') {
     container.innerHTML = `
-      <div class="empty-state">Действия ещё не запущены.</div>
+      <div class="empty-state">Р”РµР№СЃС‚РІРёСЏ РµС‰С‘ РЅРµ Р·Р°РїСѓС‰РµРЅС‹.</div>
       <div class="transcript-actions">
-        <button class="btn btn-primary" id="btn-start-actions">Найти действия</button>
+        <button class="btn btn-primary" id="btn-start-actions">РќР°Р№С‚Рё РґРµР№СЃС‚РІРёСЏ</button>
       </div>
     `;
     document.getElementById('btn-start-actions')
       .addEventListener('click', () => _startActions(filename));
 
   } else if (data.status === 'running') {
-    container.innerHTML = '<div class="empty-state">Идёт построение действий…</div>';
+    container.innerHTML = '<div class="empty-state">РРґС‘С‚ РїРѕСЃС‚СЂРѕРµРЅРёРµ РґРµР№СЃС‚РІРёР№вЂ¦</div>';
     _actionsPoll = setInterval(() => _loadActionsState(filename), 2000);
 
   } else if (data.status === 'done') {
     if (!data.items || data.items.length === 0) {
-      container.innerHTML = '<div class="empty-state">В транскрипте не найдено действий или задач.</div>';
+      container.innerHTML = '<div class="empty-state">Р’ С‚СЂР°РЅСЃРєСЂРёРїС‚Рµ РЅРµ РЅР°Р№РґРµРЅРѕ РґРµР№СЃС‚РІРёР№ РёР»Рё Р·Р°РґР°С‡.</div>';
     } else {
       const list = data.items.map(item => `<li style="margin-bottom:8px">${escapeHtml(item)}</li>`).join('');
       container.innerHTML = `<div class="transcript-text"><ol style="padding-left:20px;margin:0">${list}</ol></div>`;
@@ -741,36 +957,36 @@ function _renderActionsState(data, filename, container) {
 
   } else if (data.status === 'error') {
     container.innerHTML = `
-      <div class="empty-state error-text">Ошибка поиска действий: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+      <div class="empty-state error-text">РћС€РёР±РєР° РїРѕРёСЃРєР° РґРµР№СЃС‚РІРёР№: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-actions">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-actions">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-actions')
       .addEventListener('click', () => _startActions(filename));
 
   } else {
-    container.innerHTML = `<div class="empty-state error-text">Неожиданный статус от сервера: ${escapeHtml(data.status)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµРѕР¶РёРґР°РЅРЅС‹Р№ СЃС‚Р°С‚СѓСЃ РѕС‚ СЃРµСЂРІРµСЂР°: ${escapeHtml(data.status)}</div>`;
   }
 }
 
 async function _startActions(filename) {
   const container = document.getElementById('actions-state');
-  container.innerHTML = '<div class="empty-state">Идёт построение действий…</div>';
+  container.innerHTML = '<div class="empty-state">РРґС‘С‚ РїРѕСЃС‚СЂРѕРµРЅРёРµ РґРµР№СЃС‚РІРёР№вЂ¦</div>';
 
   try {
     const res = await fetch(`/api/actions/${encodeURIComponent(filename)}`, { method: 'POST' });
-    if (!res.ok) throw new Error(`Ошибка запуска (HTTP ${res.status})`);
+    if (!res.ok) throw new Error(`РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° (HTTP ${res.status})`);
     const data = await res.json();
     if (data.status === 'no_transcript') {
-      container.innerHTML = '<div class="empty-state">Действия недоступны: нет готового транскрипта.</div>';
+      container.innerHTML = '<div class="empty-state">Р”РµР№СЃС‚РІРёСЏ РЅРµРґРѕСЃС‚СѓРїРЅС‹: РЅРµС‚ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.</div>';
       return;
     }
     if (data.status === 'error') {
       container.innerHTML = `
-        <div class="empty-state error-text">Ошибка поиска действий: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+        <div class="empty-state error-text">РћС€РёР±РєР° РїРѕРёСЃРєР° РґРµР№СЃС‚РІРёР№: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
         <div class="transcript-actions">
-          <button class="btn btn-secondary" id="btn-retry-actions">Попробовать снова</button>
+          <button class="btn btn-secondary" id="btn-retry-actions">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
         </div>
       `;
       document.getElementById('btn-retry-actions')
@@ -780,9 +996,9 @@ async function _startActions(filename) {
     _actionsPoll = setInterval(() => _loadActionsState(filename), 2000);
   } catch (e) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить поиск действий: ${escapeHtml(e.message || e)}</div>
+      <div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ РїРѕРёСЃРє РґРµР№СЃС‚РІРёР№: ${escapeHtml(e.message || e)}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-actions">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-actions">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-actions')
@@ -797,17 +1013,17 @@ function _clearActionsPoll() {
   }
 }
 
-// ── EXPERT TAB ───────────────────────────────────────────────
+// в”Ђв”Ђ EXPERT TAB в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 async function _loadExpertState(filename) {
   const container = document.getElementById('expert-state');
   try {
     const res = await fetch(`/api/expert/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error('Ошибка сервера');
+    if (!res.ok) throw new Error('РћС€РёР±РєР° СЃРµСЂРІРµСЂР°');
     const data = await res.json();
     _renderExpertState(data, filename, container);
   } catch (e) {
-    container.innerHTML = `<div class="empty-state error-text">Не удалось получить статус экспертного анализа: ${escapeHtml(e.message || e)}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃС‚Р°С‚СѓСЃ СЌРєСЃРїРµСЂС‚РЅРѕРіРѕ Р°РЅР°Р»РёР·Р°: ${escapeHtml(e.message || e)}</div>`;
   }
 }
 
@@ -815,29 +1031,29 @@ function _renderExpertState(data, filename, container) {
   _clearExpertPoll();
 
   if (data.status === 'no_transcript') {
-    container.innerHTML = '<div class="empty-state">Экспертный анализ недоступен: нет готового транскрипта.</div>';
+    container.innerHTML = '<div class="empty-state">Р­РєСЃРїРµСЂС‚РЅС‹Р№ Р°РЅР°Р»РёР· РЅРµРґРѕСЃС‚СѓРїРµРЅ: РЅРµС‚ РіРѕС‚РѕРІРѕРіРѕ С‚СЂР°РЅСЃРєСЂРёРїС‚Р°.</div>';
 
   } else if (data.status === 'idle') {
     container.innerHTML = `
-      <div class="empty-state">Экспертный анализ ещё не запущен.</div>
+      <div class="empty-state">Р­РєСЃРїРµСЂС‚РЅС‹Р№ Р°РЅР°Р»РёР· РµС‰С‘ РЅРµ Р·Р°РїСѓС‰РµРЅ.</div>
       <div class="transcript-actions">
-        <button class="btn btn-primary" id="btn-start-expert">Запустить анализ</button>
+        <button class="btn btn-primary" id="btn-start-expert">Р—Р°РїСѓСЃС‚РёС‚СЊ Р°РЅР°Р»РёР·</button>
       </div>
     `;
     document.getElementById('btn-start-expert')
       .addEventListener('click', () => _startExpert(filename));
 
   } else if (data.status === 'running') {
-    container.innerHTML = '<div class="empty-state">Идёт экспертный анализ… Это может занять до минуты.</div>';
+    container.innerHTML = '<div class="empty-state">РРґС‘С‚ СЌРєСЃРїРµСЂС‚РЅС‹Р№ Р°РЅР°Р»РёР·вЂ¦ Р­С‚Рѕ РјРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ РґРѕ РјРёРЅСѓС‚С‹.</div>';
     _expertPoll = setInterval(() => _loadExpertState(filename), 4000);
 
   } else if (data.status === 'done') {
     const report = data.report || {};
     if (!report.title) {
       container.innerHTML = `
-        <div class="empty-state error-text">Формат экспертного отчёта устарел. Перезапустите анализ.</div>
+        <div class="empty-state error-text">Р¤РѕСЂРјР°С‚ СЌРєСЃРїРµСЂС‚РЅРѕРіРѕ РѕС‚С‡С‘С‚Р° СѓСЃС‚Р°СЂРµР». РџРµСЂРµР·Р°РїСѓСЃС‚РёС‚Рµ Р°РЅР°Р»РёР·.</div>
         <div class="transcript-actions">
-          <button class="btn btn-secondary" id="btn-rerun-expert">Перезапустить анализ</button>
+          <button class="btn btn-secondary" id="btn-rerun-expert">РџРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЊ Р°РЅР°Р»РёР·</button>
         </div>
       `;
       document.getElementById('btn-rerun-expert')
@@ -848,57 +1064,57 @@ function _renderExpertState(data, filename, container) {
 
   } else if (data.status === 'error') {
     container.innerHTML = `
-      <div class="empty-state error-text">Ошибка экспертного анализа: ${escapeHtml(data.error || 'неизвестная ошибка')}</div>
+      <div class="empty-state error-text">РћС€РёР±РєР° СЌРєСЃРїРµСЂС‚РЅРѕРіРѕ Р°РЅР°Р»РёР·Р°: ${escapeHtml(data.error || 'РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°')}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-expert">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-expert">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-expert')
       .addEventListener('click', () => _startExpert(filename));
 
   } else {
-    container.innerHTML = `<div class="empty-state error-text">Неожиданный ответ сервера: ${escapeHtml(JSON.stringify(data).substring(0, 200))}</div>`;
+    container.innerHTML = `<div class="empty-state error-text">РќРµРѕР¶РёРґР°РЅРЅС‹Р№ РѕС‚РІРµС‚ СЃРµСЂРІРµСЂР°: ${escapeHtml(JSON.stringify(data).substring(0, 200))}</div>`;
   }
 }
 
 function _renderExpertReport(report, container) {
   if (!report || !report.title) {
-    container.innerHTML = '<div class="empty-state">Анализ не вернул результатов.</div>';
+    container.innerHTML = '<div class="empty-state">РђРЅР°Р»РёР· РЅРµ РІРµСЂРЅСѓР» СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ.</div>';
     return;
   }
 
-  const levelClass = report.match_level === 'Высокий' ? 'level-high'
-    : report.match_level === 'Средний' ? 'level-medium' : 'level-low';
+  const levelClass = report.match_level === 'Р’С‹СЃРѕРєРёР№' ? 'level-high'
+    : report.match_level === 'РЎСЂРµРґРЅРёР№' ? 'level-medium' : 'level-low';
 
   const signsHtml = (report.found_signs || []).length > 0
     ? (report.found_signs.map(s => `<span class="expert-chip">${escapeHtml(s)}</span>`).join(''))
-    : '<span class="expert-empty-inline">не найдено</span>';
+    : '<span class="expert-empty-inline">РЅРµ РЅР°Р№РґРµРЅРѕ</span>';
 
   const actionsHtml = (report.action_items || []).length > 0
     ? `<ul class="expert-actions-list">${report.action_items.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`
-    : '<p class="expert-empty-inline">нет</p>';
+    : '<p class="expert-empty-inline">РЅРµС‚</p>';
 
   const phrasesHtml = (report.key_phrases || []).length > 0
     ? `<ul class="expert-phrases-list">${report.key_phrases.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`
-    : '<p class="expert-empty-inline">нет</p>';
+    : '<p class="expert-empty-inline">РЅРµС‚</p>';
 
   const summaries = report.speakers_summary || [];
   const speakerSummaryHtml = `
     <div class="expert-section">
-      <div class="expert-section-label">Демо-разделение участников</div>
+      <div class="expert-section-label">Р”РµРјРѕ-СЂР°Р·РґРµР»РµРЅРёРµ СѓС‡Р°СЃС‚РЅРёРєРѕРІ</div>
       ${summaries.length > 0
         ? summaries.map(sp => `
             <div class="expert-speaker-card">
               <div class="expert-speaker-name">${escapeHtml(sp.speaker)}</div>
               <div class="expert-speaker-text">${escapeHtml(sp.text)}</div>
             </div>`).join('')
-        : '<p class="expert-empty-inline">Демо-разделение спикеров недоступно для этой записи.</p>'}
+        : '<p class="expert-empty-inline">Р”РµРјРѕ-СЂР°Р·РґРµР»РµРЅРёРµ СЃРїРёРєРµСЂРѕРІ РЅРµРґРѕСЃС‚СѓРїРЅРѕ РґР»СЏ СЌС‚РѕР№ Р·Р°РїРёСЃРё.</p>'}
     </div>`;
 
   const signs = report.speaker_signs || [];
   const speakerSignsHtml = signs.length > 0
     ? `<div class="expert-section">
-        <div class="expert-section-label">Признаки по участникам</div>
+        <div class="expert-section-label">РџСЂРёР·РЅР°РєРё РїРѕ СѓС‡Р°СЃС‚РЅРёРєР°Рј</div>
         ${signs.map(sp => `
           <div class="expert-speaker-signs-row">
             <span class="expert-speaker-signs-name">${escapeHtml(sp.speaker)}:</span>
@@ -913,32 +1129,32 @@ function _renderExpertReport(report, container) {
 
       <div class="expert-cards-row">
         <div class="expert-card">
-          <div class="expert-card-label">Сценарий</div>
+          <div class="expert-card-label">РЎС†РµРЅР°СЂРёР№</div>
           <div class="expert-card-value">${escapeHtml(report.scenario)}</div>
         </div>
         <div class="expert-card">
-          <div class="expert-card-label">Уровень совпадения</div>
+          <div class="expert-card-label">РЈСЂРѕРІРµРЅСЊ СЃРѕРІРїР°РґРµРЅРёСЏ</div>
           <div class="expert-card-value ${levelClass}">${escapeHtml(report.match_level)}</div>
         </div>
       </div>
 
       <div class="expert-section">
-        <div class="expert-section-label">Обнаруженные признаки</div>
+        <div class="expert-section-label">РћР±РЅР°СЂСѓР¶РµРЅРЅС‹Рµ РїСЂРёР·РЅР°РєРё</div>
         <div class="expert-chips">${signsHtml}</div>
       </div>
 
       <div class="expert-section">
-        <div class="expert-section-label">Вывод</div>
+        <div class="expert-section-label">Р’С‹РІРѕРґ</div>
         <p class="expert-conclusion">${escapeHtml(report.conclusion)}</p>
       </div>
 
       <div class="expert-section">
-        <div class="expert-section-label">Рекомендованные действия</div>
+        <div class="expert-section-label">Р РµРєРѕРјРµРЅРґРѕРІР°РЅРЅС‹Рµ РґРµР№СЃС‚РІРёСЏ</div>
         ${actionsHtml}
       </div>
 
       <div class="expert-section">
-        <div class="expert-section-label">Ключевые фразы в записи</div>
+        <div class="expert-section-label">РљР»СЋС‡РµРІС‹Рµ С„СЂР°Р·С‹ РІ Р·Р°РїРёСЃРё</div>
         ${phrasesHtml}
       </div>
 
@@ -952,19 +1168,19 @@ function _renderExpertReport(report, container) {
 
 async function _startExpert(filename) {
   const container = document.getElementById('expert-state');
-  container.innerHTML = '<div class="empty-state">Идёт экспертный анализ… Это может занять до минуты.</div>';
+  container.innerHTML = '<div class="empty-state">РРґС‘С‚ СЌРєСЃРїРµСЂС‚РЅС‹Р№ Р°РЅР°Р»РёР·вЂ¦ Р­С‚Рѕ РјРѕР¶РµС‚ Р·Р°РЅСЏС‚СЊ РґРѕ РјРёРЅСѓС‚С‹.</div>';
 
   try {
     const mode = _getSelectedAnalysisMode();
     const query = `?analysis_mode=${encodeURIComponent(mode)}`;
     const res = await fetch(`/api/expert/${encodeURIComponent(filename)}${query}`, { method: 'POST' });
-    if (!res.ok) throw new Error('Ошибка запуска');
+    if (!res.ok) throw new Error('РћС€РёР±РєР° Р·Р°РїСѓСЃРєР°');
     _expertPoll = setInterval(() => _loadExpertState(filename), 4000);
   } catch (err) {
     container.innerHTML = `
-      <div class="empty-state error-text">Не удалось запустить экспертный анализ: ${escapeHtml(err.message || err)}</div>
+      <div class="empty-state error-text">РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РїСѓСЃС‚РёС‚СЊ СЌРєСЃРїРµСЂС‚РЅС‹Р№ Р°РЅР°Р»РёР·: ${escapeHtml(err.message || err)}</div>
       <div class="transcript-actions">
-        <button class="btn btn-secondary" id="btn-retry-expert">Попробовать снова</button>
+        <button class="btn btn-secondary" id="btn-retry-expert">РџРѕРїСЂРѕР±РѕРІР°С‚СЊ СЃРЅРѕРІР°</button>
       </div>
     `;
     document.getElementById('btn-retry-expert')
@@ -979,12 +1195,12 @@ function _clearExpertPoll() {
   }
 }
 
-// ── УТИЛИТЫ ─────────────────────────────────────────────────
+// в”Ђв”Ђ РЈРўРР›РРўР« в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 function formatSize(bytes) {
-  if (bytes < 1024) return bytes + ' Б';
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' КБ';
-  return (bytes / 1048576).toFixed(1) + ' МБ';
+  if (bytes < 1024) return bytes + ' Р‘';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' РљР‘';
+  return (bytes / 1048576).toFixed(1) + ' РњР‘';
 }
 
 function formatDate(ts) {
@@ -994,7 +1210,7 @@ function formatDate(ts) {
 async function _convertRecordedBlobToWav(blob) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) {
-    throw new Error('AudioContext недоступен в браузере');
+    throw new Error('AudioContext РЅРµРґРѕСЃС‚СѓРїРµРЅ РІ Р±СЂР°СѓР·РµСЂРµ');
   }
   const ctx = new AudioCtx();
   try {
@@ -1071,3 +1287,4 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+

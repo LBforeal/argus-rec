@@ -1,9 +1,13 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Аргус</title>
+  <title>Аргус REC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="index">
@@ -16,16 +20,26 @@
 
   <div class="app">
     <header class="header home-header">
-      <div class="brand-mark-wrap" aria-hidden="true">
-        <img src="/logo%20white.png" alt="" class="brand-mark" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/logo%20black.png';}else{this.parentElement.style.display='none';}">
+      <div class="home-header-left">
+        <div class="brand-mark-wrap" aria-hidden="true">
+          <img src="/logo%20white.png" alt="" class="brand-mark" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/logo%20black.png';}else{this.parentElement.style.display='none';}">
+        </div>
+        <div class="home-brand-copy">
+          <h1 class="logo">АРГУС REC</h1>
+          <p class="home-subtitle">Интеллектуальный профессиональный диктофон</p>
+        </div>
       </div>
-      <h1 class="logo">АРГУС</h1>
+
+      <button class="profile-chip" id="btn-open-profile-setup" type="button">
+        <span class="material-symbols-outlined profile-chip-icon" aria-hidden="true">tune</span>
+        <span id="profile-summary">Профиль не выбран</span>
+      </button>
     </header>
 
     <main class="main home-main">
       <section class="home-panel">
         <div class="action-bar">
-          <button class="btn btn-primary btn-record" id="btn-record">
+          <button class="btn btn-primary btn-record" id="btn-record" type="button">
             <span class="btn-record-wave-icon" aria-hidden="true">
               <span></span><span></span><span></span><span></span>
             </span>
@@ -42,7 +56,7 @@
             <span class="recording-dot"></span>
             <span id="recording-timer">00:00</span>
           </div>
-          <button class="btn btn-stop" id="btn-stop-record">Остановить</button>
+          <button class="btn btn-stop" id="btn-stop-record" type="button">Остановить</button>
         </div>
 
         <div id="upload-status" class="upload-status" hidden></div>
@@ -56,6 +70,73 @@
         <div id="file-list"></div>
       </section>
     </main>
+  </div>
+
+  <div class="onboarding-overlay hidden" id="onboarding-overlay" aria-hidden="true">
+    <div class="onboarding-backdrop" data-close-onboarding></div>
+
+    <section class="onboarding-card" data-onboarding-step="welcome">
+      <button class="onboarding-close" id="onboarding-close" type="button" aria-label="Закрыть">
+        <span class="material-symbols-outlined" aria-hidden="true">close</span>
+      </button>
+      <div class="onboarding-mark">ARGUS REC</div>
+      <h2>Добро пожаловать</h2>
+      <p>Перед началом выберите формат работы. Это влияет на подачу отчёта и логику экспертного анализа.</p>
+      <button class="btn btn-primary onboarding-main-btn" id="onboarding-start" type="button">Начать настройку</button>
+    </section>
+
+    <section class="onboarding-card hidden" data-onboarding-step="mode">
+      <button class="onboarding-close" type="button" data-close-onboarding aria-label="Закрыть">
+        <span class="material-symbols-outlined" aria-hidden="true">close</span>
+      </button>
+      <h2>Выберите формат работы</h2>
+      <p>Обычный режим для личных задач. Профильный — для служебной и юридической работы.</p>
+
+      <div class="onboarding-mode-grid">
+        <button class="onboarding-mode-card" type="button" data-mode-card data-mode="basic">
+          <span class="material-symbols-outlined" aria-hidden="true">person</span>
+          <strong>Обычный пользователь</strong>
+          <small>Запись, транскрипт, обзор и действия в базовом формате</small>
+        </button>
+        <button class="onboarding-mode-card" type="button" data-mode-card data-mode="pro">
+          <span class="material-symbols-outlined" aria-hidden="true">admin_panel_settings</span>
+          <strong>Профильный режим</strong>
+          <small>Роли, юридический стиль отчёта и работа с официальными шаблонами</small>
+        </button>
+      </div>
+
+      <div class="onboarding-actions">
+        <button class="btn btn-secondary" id="onboarding-mode-back" type="button">Назад</button>
+        <button class="btn btn-primary" id="onboarding-mode-next" type="button" disabled>Далее</button>
+      </div>
+    </section>
+
+    <section class="onboarding-card hidden" data-onboarding-step="profession">
+      <button class="onboarding-close" type="button" data-close-onboarding aria-label="Закрыть">
+        <span class="material-symbols-outlined" aria-hidden="true">close</span>
+      </button>
+      <h2>Укажите вашу роль</h2>
+      <p>Роль определяет структуру итогового отчёта и шаблоны документа.</p>
+
+      <div class="onboarding-profession-grid" id="onboarding-profession-grid">
+        <button class="onboarding-profession-card" type="button" data-profession="Сотрудник МВД">Сотрудник МВД</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Следователь СК">Следователь СК</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Судья">Судья</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Помощник судьи">Помощник судьи</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Адвокат">Адвокат</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Юрист">Юрист</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Сотрудник службы безопасности">Сотрудник службы безопасности</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Сотрудник прокуратуры">Сотрудник прокуратуры</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Сотрудник налоговых органов">Сотрудник налоговых органов</button>
+        <button class="onboarding-profession-card" type="button" data-profession="Сотрудник МФЦ">Сотрудник МФЦ</button>
+        <button class="onboarding-profession-card onboarding-profession-card-wide" type="button" data-profession="Сотрудник государственной/муниципальной приёмной">Сотрудник государственной/муниципальной приёмной</button>
+      </div>
+
+      <div class="onboarding-actions">
+        <button class="btn btn-secondary" id="onboarding-profession-back" type="button">Назад</button>
+        <button class="btn btn-primary" id="onboarding-finish" type="button" disabled>Сохранить и продолжить</button>
+      </div>
+    </section>
   </div>
 
   <script src="app.js"></script>
